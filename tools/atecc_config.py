@@ -243,9 +243,10 @@ def _secret_key(*, req_auth: int | None = None, limited_use: bool = False,
     """A slot holding a secret used only as an HMAC key.
 
     IsSecret with EncryptRead clear means the contents never come back out by
-    any command. NoMac stays clear because these keys exist to be used by MAC,
-    CheckMac and SHA-HMAC -- setting it would lock the chip out of the one
-    thing every one of these slots is for.
+    clear reads. NoMac stays clear in this policy. That also exposes PIN
+    keys to verification commands outside the firmware retry loop. Do not
+    treat this policy as a hardware PIN-guess limit; VALIDATION.md records
+    the missing command-level evidence and physical tests.
     """
     return (SlotConfig(is_secret=True, encrypt_read=False, no_mac=False,
                        limited_use=limited_use, read_key=0,

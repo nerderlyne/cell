@@ -653,13 +653,18 @@ Milestone 5 in `BUILD.md` §15, spectrum of dye against your own blood, is the
   --behaviour` asks the chip directly, and it must be run before `lock-data`,
   while a wrong answer is still recoverable.
 
-- **The ten-attempt limit, as a silicon guarantee.** It is not one, and never
-  was. This part has no retry counter. Ten attempts is firmware arithmetic over
-  a monotonic counter and a baseline that cannot be moved without the PIN —
-  good against someone who picks the device up, nothing against someone who
-  opens it and replaces the firmware. What the chip does enforce is that
-  Counter0 stops at 2,097,151. The PIN is eight digits so that ceiling sits
-  below the keyspace rather than above it.
+- **PIN guessing through raw chip commands.** Unresolved. Ten attempts is
+  enforced by firmware, not by the chip's PIN slots. LimitedUse is configured
+  on the wrapping slots, while the PIN slots permit unmetered cryptographic
+  use. A caller can bypass `verify_pin` and test candidates directly; an
+  exposed MAC/HMAC under a PIN-derived key can provide an offline verifier.
+  The counter ceiling is not a bound on guesses. Before claiming a fix,
+  obtain the full manufacturer command restrictions and test failed CheckMac
+  calls with Counter0 read before and after, plus MAC, HMAC, SHA-HMAC and
+  derived-state paths for reusable verification outputs. Both PIN slots must
+  behave identically. Check the actual policy at startup and reject obsolete
+  configurations; a locked config zone cannot be upgraded in place. Existing
+  fake-chip and `verify --behaviour` tests do not establish these properties.
 - **A constant-time signing core.** There is not one, by decision rather than
   by oversight. `secp256k1.py` is pure Python affine and Jacobian arithmetic
   that branches on the scalar's bits, and the fixed-base table indexes on the

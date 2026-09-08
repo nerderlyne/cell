@@ -56,7 +56,7 @@ secret — but here that is exactly the mechanism. Slot 2 holds
 
     HMAC-free, deliberately:  SHA-256("CELL/pin/v1" || serial || PIN)
 
-so a host that knows the PIN can compute it and a host that does not cannot.
+so a host can compute candidate keys from the public serial and a PIN guess.
 The serial number is in there so one precomputed table does not cover every
 CELL ever built; it is not a secret and does not need to be.
 
@@ -73,39 +73,22 @@ point slot 0's ReqAuth makes the derive fail and the device cannot open its
 own seed. The config and the driver contradicted each other and only one of
 them could ship.
 
-WHAT THE SILICON ENFORCES, AND WHAT IT DOES NOT. Worth being exact, because
-the difference is where somebody's money is.
+PIN GUESSING IS NOT BOUNDED BY THE WRAPPING COUNTER. The firmware spends an
+attempt before CheckMac and wipes after ten wrong PINs. Raw chip commands do
+not go through that code. The current configuration meters the wrapping
+slots, but the PIN slots allow unmetered verification operations. Their keys
+are derived from the public serial and PIN, so an exposed MAC/HMAC can also
+provide an offline verifier. ReqAuth on a wrapping slot does not close that
+separate command boundary.
 
-    Enforced by the chip:  the wrapping secrets never leave it.
-                           No derive without a fresh CheckMac against the PIN
-                           slot, so a PIN guess cannot be tested offline.
-                           Counter0 only ever increases; there is no reset
-                           command and this firmware does not have one either.
-                           The baseline cannot be moved without the PIN,
-                           because moving it is an encrypted write under the
-                           PIN key.
-                           At most 2**21 derives in the life of the part,
-                           which is what LimitedUse against Counter0 means.
+The advertised 2**21 hardware ceiling on PIN guesses was incorrect. A fix
+requires the full ATECC608B command restrictions and physical validation of
+failed CheckMac metering and every output path using a PIN key. NoMac or
+LimitedUse bits alone, asserted by a software fake, are not that evidence.
+Already locked configurations cannot be rewritten. An enrolled optical PUF
+remains a separate input to the seed-wrapping key; it does not repair the PIN
+verification boundary. See VALIDATION.md for the outstanding checks.
 
-    NOT enforced by the chip:  the ten-attempt limit. There is no silicon
-                           retry counter on this part. `attempts_remaining()`
-                           is arithmetic this firmware does over a counter and
-                           a baseline, and firmware is what an attacker with
-                           the case open replaces.
-
-    What that leaves:      an attacker running their own firmware gets as many
-                           PIN guesses as Counter0 has left, which is 2**21 =
-                           2,097,151. That is why PIN_LENGTH is 8 and not 6.
-                           A six-digit PIN is 10**6 guesses and fits inside
-                           that budget with room to spare; an eight-digit PIN
-                           is 10**8 and does not, so the chip stops answering
-                           long before the keyspace is exhausted. The ten
-                           attempts protect an owner against someone who
-                           picks the device up. The counter ceiling is what
-                           protects them against someone who opens it.
-
-Both of those rest on the tamper seal in the end, exactly as BUILD.md 16 says
-of the attestation. This file does not claim more.
 """
 
 from __future__ import annotations
@@ -134,9 +117,8 @@ FOR_ROLE = {
 
 I2C_ADDRESS = 0x60
 
-# The counter is 21 bits. See the module docstring: this is the real ceiling on
-# how many PIN guesses any firmware can ever make against this chip, and it is
-# the reason the PIN is eight digits.
+# The counter is 21 bits. This bounds metered operations, not PIN guesses;
+# the PIN verification slots are a separate boundary (see module docstring).
 COUNTER_MAX = (1 << 21) - 1
 
 # cryptoauthlib's Python binding documents these by their C names but does not
