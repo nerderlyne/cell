@@ -9,13 +9,28 @@ the thresholds ship as physics-derived defaults, and `calibrate.py` replaces
 them with values measured on your own optics, your own printer and your own
 samples. That step is one of the build milestones in `BUILD.md` §15.
 
+## At a glance
+
+| Area | Status |
+|---|---|
+| Signing stack: curve, BIP-32/39, PSBT, sighash, addresses, RLP, EIP-712 | **Verified** against published vectors, two independent libraries, an independent script interpreter, and Bitcoin Core on regtest |
+| Attestation, quorum, ring signature, proof of life | **Verified** in CI, and against a live node for the beacon period |
+| Blood and touch gate logic | **Verified** against a synthetic spoof panel. Thresholds are physics-derived and want real samples |
+| Enclosure, cartridge and the printed parts | **Verified** as geometry: every mesh checked, every fit checked, the drawing generated from the mesh |
+| ATECC608B driver | **Arithmetic verified** against Microchip's own definitions. Nothing that touches I²C has run |
+| Sensor head, display, buttons, QR camera | **Written, not run.** Each needs the part in hand |
+| Gate separation on real blood | **Open.** This is the measurement the design turns on, and nobody has contributed one |
+| Thermal, supply and the optical PUF as optics | **Open.** Bench checks exist and want a built device |
+
+The sections below carry the detail: what was checked, by what method, and what each open row needs.
+
 ## Built, on video
 
 [A prototype has been built and used to sign behind the blood
 gate](https://x.com/austingriffith/status/2097231722094191031) — video,
-September 2026. No captures, thresholds or panel runs from that build have
-been contributed here, so no row below moves on it: a video shows that it
-worked once, not what it measured.
+September 2026. That build did not contribute any captures, thresholds or
+panel runs, so nothing below changes because of it. A video shows the device
+worked once; the rows here record measurements, and there are none from it.
 
 The frame in `README.md` does show the chemistry sequence running in order on
 real optics: laser warm-up, then G1 to G4 pending. Those are

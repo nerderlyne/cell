@@ -1,6 +1,6 @@
 # CELL
 
-A hardware wallet that requires a live pulse, or a drop of fresh blood, to authorise a transaction.
+A hardware wallet that needs a live pulse, or a drop of fresh blood, to authorise a transaction.
 
 Airgapped signer for Bitcoin and Ethereum. Raspberry Pi, 3D-printed enclosure, $97.45 of hardware. Public domain.
 
@@ -8,41 +8,11 @@ Airgapped signer for Bitcoin and Ethereum. Raspberry Pi, 3D-printed enclosure, $
 
 <sup>The ring is the sensor port. A fingertip on it, or a cartridge under it. It is a bezel, not a control; nothing rotates.</sup>
 
-**Spin it yourself.** The enclosure is a parametric three.js model, not a static render:
-
-```bash
-python3 -m http.server -d viewer 8000     # then open localhost:8000/instrument.html
-```
-
-Orbit it, and export OBJ or glTF straight from the viewer. `diagrams/turntable.mp4` is the same render as h.264, which holds more detail on a dark subject than the GIF does. The turntable above is rendered from that same model by `tools/render_turntable.py`, so it cannot show something the geometry does not. `models/README.md` documents the pipeline and the coordinate convention.
-
-## Someone built one
-
-**[Austin Griffith built a prototype and signed a transaction with fresh blood.](https://x.com/austingriffith/status/2097231722094191031)** Video, September 2026.
-
-<a href="https://x.com/austingriffith/status/2097231722094191031"><img src="diagrams/first-build.png" alt="The blood gate running on the first prototype: laser warm-up, then gates G1 to G4" width="360"></a>
-
-<sup>A frame from the video: the blood gate mid-run on the prototype's display. The four gates on screen are this design's chemistry sequence in the builder's own wording — G1 return signal, G2 cellular scatter, G3 Soret, G4 shape.</sup>
-
-The first one outside this repository: assembled hardware, a sample in the chamber, and a signature that happened because the blood gate passed. No captures from that build have been contributed here, so every row in `VALIDATION.md` stands where it was, and the rows waiting on hardware still want the panel numbers behind them.
-
-## Status
-
-The design is complete and the firmware self-tests on every commit: 46 suites covering the signing stack against published test vectors, both liveness gates, the whole device loop, and the documented build sequence driven end to end. Bitcoin Core accepts and mines what it signs.
-
-The sensor head, the panel, the buttons and the gate chip are written but unverified against hardware here, and `VALIDATION.md` lists each one and what closes it. Start with the reader kit: $63 of hardware plus $31 of consumables, and a weekend proves the sensing before you spend anything on the wallet half. **There's a [bounty](https://poidh.xyz/mainnet/bounty/24) for building one and signing with it. `BOUNTY.md` says what a claim looks like, and a reader-only run counts.**
-
-Sensing thresholds ship as physics-derived defaults and are calibrated to your hardware on first build. `calibrate.py` runs the spoof panel for both tiers, sets every threshold from your own samples, and writes a file the device loads. Touch sessions are 15 seconds each, so that half of the calibration is minutes of work. `BUILD.md` §13 is the procedure. `VALIDATION.md` tracks exactly what has been measured.
-
-Read `SAFETY.md` before the first build.
-
-## What it does
-
-<img src="diagrams/how-it-works.svg" alt="How the two liveness tiers gate the signing key" width="100%">
+## What it is
 
 Transactions arrive as a QR code read by the camera and leave as a QR code on the display. There is no wifi, no bluetooth and no USB data path.
 
-Authorisation requires a PIN plus one of two liveness proofs.
+To authorise a signature you enter an eight-digit PIN and pass one of two liveness proofs.
 
 | | Touch | Blood |
 |---|---|---|
@@ -51,135 +21,161 @@ Authorisation requires a PIN plus one of two liveness proofs.
 | Consumable | None | Cartridge and lancet |
 | Proves | A living body is present | A living body bled, just now |
 
-Touch is the everyday default. Blood is a mode the user enters deliberately.
+Touch is the everyday default. Blood is a mode you enter deliberately.
 
-## Why a physical act
+A button press costs nothing, so malware, an automated script and a deliberate human decision all produce an identical signal. An act your body rate-limits separates them: one drop of blood is one signature, and no budget compresses that.
 
-A button press costs nothing, so malware, an automated script and a deliberate human decision all produce an identical signal. A physical act that is rate-limited by the body separates them: one drop of blood is one signature, and no amount of capital compresses that.
+<img src="diagrams/how-it-works.svg" alt="How the two liveness tiers gate the signing key" width="100%">
 
-Sealing an agreement in blood recurs across cultures that had no contact with each other, for the same reason each time. A mark anyone can make proves nothing; a mark that costs something proves intent.
+## Status
 
-## The blood gate
+**Firmware: complete.** 46 suites run on every commit, covering the signing stack against the vectors published in the BIPs, RFC 6979 and the EIPs, both liveness gates, the whole device loop, and the documented build sequence driven end to end. Bitcoin Core funds an address this firmware derives, and accepts and mines the spend it signs.
 
-Six gates, all of which must pass. Implementation in `firmware/blood_gate.py`, with every threshold in a single dataclass.
+**Enclosure: complete.** Eleven parts are printed, all generated from the same constants the specification quotes, all mesh-checked and fit-checked before they are written.
 
-### Chemistry: is it blood
+**Sensors and secure element: written, not yet run on hardware.** The sensor head, the display, the buttons and the ATECC608B driver are code without a bench behind them. `VALIDATION.md` lists every claim in this repository and how it was checked, including the ones that are still open.
 
-Haemoglobin absorbs strongly at 415 nm, the Soret band produced by the iron-bearing porphyrin ring at the centre of the molecule. The absorption is roughly an order of magnitude stronger than anything else in the visible spectrum, and no common red substance produces it. Ketchup, food dye, beet juice and theatrical blood all fail this test immediately.
+**Thresholds: calibrated on your build.** Sensing thresholds ship as physics-derived defaults. `calibrate.py` runs the spoof panel for both tiers against your own samples and writes the file the device loads. `BUILD.md` §13 is the procedure.
 
-Three further gates confirm that the sample returns light at all, that it scatters in the near infrared the way a suspension of cells does rather than a dye solution, and that the full eight-channel spectrum matches oxygenated whole blood.
+### Someone built one
 
-### Motion: is it alive
+**[Austin Griffith built a prototype and signed a transaction with fresh blood.](https://x.com/austingriffith/status/2097231722094191031)** Video, September 2026.
 
-A stored sample fails on an asymmetry in how blood can be kept. Blood that can be stored has been anticoagulated and does not clot in the chamber. Blood that was not anticoagulated has already clotted and cannot be poured into a well. `BUILD.md` §16 gives the one exception to that asymmetry, and how far it reaches.
+<a href="https://x.com/austingriffith/status/2097231722094191031"><img src="diagrams/first-build.png" alt="The blood gate running on the first prototype: laser warm-up, then gates G1 to G4" width="360"></a>
 
-The device tests for this by measuring motion instead of colour. Under laser illumination, a liquid suspension of red cells produces a speckle pattern that changes continuously as the cells move. As fibrin forms it locks the cells in place and the pattern becomes static. A camera samples the pattern for ten minutes and measures the frame-to-frame correlation.
+<sup>A frame from the video: the blood gate mid-run on the prototype's display, showing this design's chemistry sequence in the builder's own wording: G1 return signal, G2 cellular scatter, G3 Soret, G4 shape.</sup>
+
+The first build outside this repository: assembled hardware, a sample in the chamber, and a signature that happened because the blood gate passed. That build did not send back any measurements, so `VALIDATION.md` is unchanged. Everything it lists as needing hardware still needs it.
+
+**There is a [bounty](https://poidh.xyz/mainnet/bounty/24) for building one and signing with it.** `BOUNTY.md` says what a claim looks like. A reader-only build counts.
+
+## Try it without hardware
+
+The gate logic, the signing stack and the whole device loop run on any machine.
+
+```bash
+pip install -r firmware/requirements.txt
+python firmware/run_tests.py           # all 46 suites
+```
+
+Or one piece at a time:
+
+```bash
+cd firmware
+python calibrate.py selftest --n 8     # blood tier, 6 gates, 18 sample classes
+python touch_gate.py                   # touch tier, 7 gates
+python test_app.py                     # the whole loop, driven with fakes
+python test_wallet.py                  # end to end, then every footgun
+```
+
+Each spoof class fails at the physically correct gate, and the self-test fails if any gate stops being exercised by at least one class.
+
+You can also spin the enclosure. It is a parametric three.js model, not a static render, and you can export OBJ or glTF straight from the viewer:
+
+```bash
+python3 -m http.server -d viewer 8000     # then open localhost:8000/instrument.html
+```
+
+## Building one
+
+Read `SAFETY.md` first. It is short, and it covers blood handling.
+
+The build splits into two kits, bought separately. **Order the reader kit first.** It answers the question that decides whether the rest is worth building, it has no security requirements because it signs nothing, and it costs a third of the total.
+
+### 1. The reader kit: $63 of hardware plus $31 of consumables
+
+A Pi, a spectrometer, a laser, a lensless camera, LEDs, a printed optical chamber, and the lancets, film and cartridges to run them. One weekend.
+
+Build it, then run the spoof panel in `BUILD.md` §13. If the gate does not separate real blood from every fake on your hardware, you stop here and you have spent $94.
+
+### 2. The wallet kit: a further $34.70
+
+The signing half: display, buttons, QR webcam, ATECC608B secure element, USB-C power, the printed shells and the ring window. Then provision a seed and do the airgap hardening: radios disabled, antenna trace cut, read-only rootfs.
+
+### The documents
+
+| | |
+|---|---|
+| `BUILD.md` | The specification. Parts, wiring, optics, cartridge, firmware, calibration, threat model |
+| `BOM.csv` | Every part, with a `Kit` column saying which kit it belongs to and what to insist on |
+| `PRINTING.md` | The print runbook: plate order, what to check at each stage, the post-processing that is not optional |
+| `SAFETY.md` | Blood handling. Read it before the first build |
+
+Eleven parts are printed, all from `python3 tools/gen_printables.py`, all checked before they are written. `models/print/MANIFEST.md` is generated in the same pass and carries every dimension, quantity and print setting.
+
+**Running costs.** A touch signature costs nothing. A blood signature spends a lancet, an alcohol pad, a PET window and a printed cartridge: about twenty cents, restocked from any pharmacy. Nothing in the device is consumed by either, and nothing on the bill of materials has a shelf life.
+
+## How the gates work
+
+### Blood: six gates, all must pass
+
+**Chemistry.** Haemoglobin absorbs strongly at 415 nm, the Soret band of the iron-bearing porphyrin ring at the centre of the molecule. The absorption is roughly an order of magnitude stronger than anything else in the visible spectrum, and no common red substance produces it. Ketchup, food dye, beet juice and theatrical blood all fail immediately. Three further gates confirm that the sample returns light at all, that it scatters in the near infrared the way a suspension of cells does rather than a dye solution, and that the full eight-channel spectrum matches oxygenated whole blood.
+
+**Motion.** Colour cannot tell fresh blood from a stored sample, so the device measures movement instead. Under laser illumination a liquid suspension of red cells produces a speckle pattern that boils as the cells move; as fibrin forms it locks them in place and the pattern freezes. A camera watches for ten minutes and measures the frame-to-frame correlation.
 
 Fresh blood is the only sample that starts decorrelated and becomes correlated. Anticoagulated blood never arrests. Clotted blood, corn syrup and gels never moved in the first place. Dye produces no speckle at all.
 
-The test assumes no particular curve shape. It asks three things: whether the sample started moving freely, whether it stopped, and whether the transition was large enough and in the right direction.
+This works because of an asymmetry in how blood can be kept: blood you can store has been anticoagulated and will not clot in the chamber, and blood that was not anticoagulated has already clotted and cannot be poured into a well. `BUILD.md` §16 gives the one exception and how far it reaches.
 
-## The touch tier
+Implementation in `firmware/blood_gate.py`, with every threshold in a single dataclass.
 
-Photoplethysmography through the same ring bore the cartridge sits under. Arterial blood volume in the fingertip changes with each heartbeat, so the light returning from it carries a small pulsatile signal on a large steady one. The white LED provides a red channel and the 940 nm LED provides infrared, both sampled at 50 Hz by the existing spectrometer. No additional hardware is required.
+### Touch: seven gates, all must pass
 
-Seven gates check that the capture rate was high enough to analyse at all, that a finger is in contact, that the signal is pulsatile at a physiological depth, that the rate falls between 40 and 180 bpm, that the cardiac band dominates, that beat-to-beat variability is present, and that the red-to-infrared ratio matches haemoglobin.
+Photoplethysmography through the same ring bore the cartridge sits under. Arterial blood volume in the fingertip changes with each heartbeat, so the light coming back carries a small pulsatile signal on a large steady one. The white LED gives a red channel and the 940 nm LED gives infrared, both sampled at 50 Hz by the spectrometer that is already there. No extra parts.
 
-The last two carry most of the anti-spoof weight. A silicone finger with dye pumped through it can produce a convincing pulse, but dye does not share haemoglobin's absorption ratio across the two wavelengths. And respiratory sinus arrhythmia puts a resting adult's beat-to-beat variability in the tens of milliseconds, where a mechanical pulsator produces single digits.
+The gates check that the capture rate was high enough to analyse, that a finger is in contact, that the signal is pulsatile at a physiological depth, that the rate falls between 40 and 180 bpm, that the cardiac band dominates, that beat-to-beat variability is present, and that the red-to-infrared ratio matches haemoglobin.
+
+The last two carry most of the anti-spoof weight. A silicone finger with dye pumped through it can produce a convincing pulse, but dye does not share haemoglobin's absorption ratio across the two wavelengths; and respiratory sinus arrhythmia puts a resting adult's beat-to-beat variability in the tens of milliseconds, where a mechanical pulsator produces single digits.
 
 Implementation in `firmware/touch_gate.py`.
 
-## Tier policy
+### Tier policy
 
-The user may always escalate to a higher tier than policy requires. The user may never proceed at a lower one.
+You may always escalate to a higher tier than policy requires. You may never proceed at a lower one.
 
-Policy sets a floor, and changing that floor is itself blood-locked in both directions. Without this rule the attack is not defeating the blood gate but lowering the threshold and using a finger. Loosening must cost blood for that reason; tightening must cost blood so that an attacker cannot lock the owner out by raising the floor.
+Policy sets a floor, and changing that floor is blood-locked in both directions. Loosening must cost blood, or a thief lowers the bar and uses their own finger. Tightening must cost blood too, or someone locks you out by raising your floor while you are travelling without cartridges.
 
-Escalation applies to a single operation and does not persist. Running permanently at blood tier is not a separate mode, only a policy with the amount threshold set to zero and every operation class locked.
-
-Five operations are blood-locked at provisioning and cannot be unlocked: policy changes, key export, device wipe, reprovisioning, and changes to the recipient allowlist.
+Escalation applies to one operation and does not persist. Five operations are blood-locked at provisioning and cannot be unlocked: policy changes, key export, device wipe, reprovisioning, and changes to the recipient allowlist.
 
 Implementation in `firmware/policy.py`.
 
-## Attestation
+## What else it does
 
-A signature carries no information about what gated the key, so the tier is asserted separately. Each device holds an attestation key generated at provisioning, and signs a 238-byte record binding the tier to a specific sighash, a monotonic counter, a firmware hash, the calibration in force and the gate measurements the claim rests on.
+### Attestation
 
-Co-signers register each other's attestation keys once, alongside the firmware and calibration hashes they will accept. After that, verifying that every member of a quorum signed at blood tier is a mechanical check, and a missing attestation counts as a failure and never an abstention.
+A signature says nothing about what gated the key, so the tier is claimed separately. Each device holds an attestation key generated at provisioning and signs a 238-byte record binding the tier to a specific sighash, a monotonic counter, a firmware hash, the calibration in force and the gate measurements behind the claim.
 
-The record travels beside the PSBT in a BIP-174 proprietary field and is stripped before broadcast, so it does not appear on chain.
+Co-signers register each other's attestation keys once, alongside the firmware and calibration hashes they accept. Verifying that every member of a quorum signed at blood tier is then a mechanical check, and a missing attestation counts as a failure and never an abstention.
 
-The record attests that a device holding this key ran the blood gate for this transaction, and commits to the measurements it got.
+The record travels beside the PSBT in a BIP-174 proprietary field and is stripped before broadcast, so it does not appear on chain. Publishing it says "this address is a CELL device, and this spend was authorised with blood", which is a leak for a treasury, and the whole point for an allowlist, so it is an option and not a default.
 
-### Putting it on chain
+A contract can check the record itself. `contracts/src/CellAttestation.sol` verifies the signature; `CellRegistry.sol` holds what the record cannot carry: whose key it is, the highest counter seen from it, and which firmware and calibration you accept. The BIP-340 Schnorr signature has no EVM precompile, so it is rearranged into one `ecrecover` plus a `modexp` to lift the point: about 41k gas to verify, 81k for a full `redeem`. The digest commits to the chain, the contract and the claimant, so a record cannot be replayed on a fork, against another deployment, or by someone else.
 
-Stripping it is the default because publishing it says "this address is a CELL device, and this spend was authorised with blood." For a treasury that is a leak.
+What that buys is a signature nobody can farm. A script produces a million; a body produces about two a day, each costing a lancet and ten minutes. Implementation in `firmware/attest.py`.
 
-For an allowlist it is the whole point, so the option is there.
+### One of these devices bled, and you cannot tell which
 
-A contract can check the record itself. `contracts/src/CellAttestation.sol` verifies the signature; `CellRegistry.sol` holds the three things the record cannot carry: whose key it is, the highest counter seen from that key, and which firmware and calibration you accept.
+For an allowlist, a mint or a quorum vote, the claim worth publishing is "a human bled", not "device 7 bled".
 
-The signature is BIP-340 Schnorr, which the EVM has no precompile for. It is rearranged into one `ecrecover` call plus a `modexp` to lift the point, so verification costs about 41k gas and a full `redeem` about 81k.
+`firmware/ring.py` signs as one member of a registered set, using LSAG over the same secp256k1 everything else here signs on. A key image `I = d · H(event ‖ P)` links two claims from one device in one event, so nobody votes twice, and leaves claims in different events unlinkable, so nobody accumulates a voting history.
 
-The digest the device signs commits to the chain, the contract and the claimant, so a record cannot be replayed on a fork, against another deployment, or by someone else.
+The firmware and calibration hashes are deliberately left out. They are what makes the ordinary record auditable, and they are exactly what would narrow a ring of forty to a ring of three. The ring replaces them: a verifier admits a set of keys and checked their firmware when it registered them.
 
-What that buys is a signature nobody can farm. A script can produce a million of them. A body produces about two a day, and each one costs a lancet and ten minutes. For allowlists, mints, quorum votes and anything else where one-human-one-action matters, that is a rate limit denominated in something an attacker cannot buy more of.
+A ring of n costs about 2n scalar multiplications on each side, which is slow in pure Python and does not matter, because the ring computes while the sample clots. Use it off chain or in a coordinator-maintained allowlist; it is too expensive to verify on chain.
 
-The limit is the one every hardware attestation has. As with a TPM quote or a Secure Enclave receipt, the claim rests on the firmware and the tamper seal: someone who opens the case and extracts the key can sign records without bleeding. So treat it as raising the cost of faking a human, not as proof of a unique one. Co-signers register firmware hashes alongside keys, and `verify()` refuses builds it does not recognise.
+### Proof of life
 
-Implementation in `firmware/attest.py`.
+Dead-man switches key off signing activity, which answers the wrong question. A stolen key resets the clock, and an owner who simply does not spend for a year looks dead. The touch gate measures a body, so CELL can tell them apart.
 
-## One of these devices bled, and you cannot tell which
+A beacon is the attestation with no transaction under it: fifteen seconds, no consumable, nothing signed with the seed. `CellRegistry.heartbeat` records when a living human was last proven present, and an inheritance path, a recovery quorum or a multisig can read it.
 
-Stripping the record throws away the part of this design with the widest reach. The claim worth publishing is not "device 7 bled" but "a human bled", and an allowlist, a mint or a quorum vote wants the second one without the first.
+**The date on the screen is the security control.** The device has no clock. The period comes from the companion and is displayed as a date range, so the owner is the clock, and `heartbeat` accepts a beacon only while its period is current. A harvested record cannot be spent early or late.
 
-`firmware/ring.py` signs the claim as one member of a registered set, using LSAG over the same secp256k1 everything else here signs on. A key image `I = d · H(event ‖ P)` makes two claims from one device in one event link, so nobody votes twice — and makes claims in different events unlinkable, so nobody accumulates a voting history. That second half is the one people get wrong, and it is the difference between resisting sybils and publishing a dossier.
-
-The firmware and calibration hashes are deliberately absent from this claim. They are what makes the ordinary record auditable, and they are exactly what would narrow a ring of forty to a ring of three. What replaces them is the ring: a verifier admits a set of keys, and it already checked their firmware when it registered them.
-
-Both halves cost about 2n scalar multiplications for a ring of n, which is slow in pure Python and does not matter, because the ring computes while the sample clots. It is not cheap enough to verify on chain; use it off chain or in an allowlist a coordinator maintains.
-
-## Proof of life
-
-Every dead-man switch in self-custody keys off signing activity, which answers the wrong question. "This key moved" is not "this person is alive": a stolen key resets the clock, and an owner who simply does not spend for a year looks dead. The touch gate measures a body, so CELL can separate them.
-
-A beacon is the attestation with no transaction under it. Fifteen seconds, no consumable, nothing signed with the seed. `CellRegistry.heartbeat` writes down when a living human was last proven present, and anything that needs to know can read it: an inheritance path, a recovery quorum, a multisig that wants a co-signer's pulse before treating them as present.
-
-Nothing new is signed. `actionDigest` already commits to the chain, the contract and the claimant, and takes a purpose word. The beacon is that function with a purpose carrying a period index, so it is the same record format, the same key and the same curve.
-
-**The date on the screen is the security control.** The device has no clock and does not pretend to. The period comes from the companion and is displayed as a date range, so the owner is the clock, and `heartbeat` accepts a beacon only while its period is the current one. A record harvested for a future period cannot be spent early and cannot be spent late. What remains is that a companion which tricks the owner into approving N future periods can keep a dead owner alive for N periods, at one gate and one wrong date each.
-
-`CellDormancy.sol` is the switch that reads it, in two phases on purpose. A claim releases nothing; it opens a challenge window, and one beacon during that window cancels it. A device that spent six months in a drawer is the ordinary case, not the attack, and fifteen seconds of a fingertip undoes it.
-
-## What it protects against
-
-The device defeats remote malware, automated signing, signing at scale, and signing without the owner's knowledge. A compromised host cannot produce a pulse or a clotting sample, and there is no batch mode. Every signature costs a physical act, and at blood tier the rate is set by your body and not by the attacker's budget.
-
-The gate asks whether someone alive is here. The PIN asks who. It is eight digits, required at both tiers, and the secure element's attempt counter increments before it checks, so cutting power mid-guess costs an attempt instead of refunding one. Ten wrong and the device wipes.
-
-Ten is a firmware rule. This chip has no retry counter in silicon, and firmware is what someone who opens the case replaces. What the chip does enforce is a counter that never decreases and stops permanently at 2,097,151, which is why the PIN is eight digits and not six: 10⁸ guesses is more than the part will ever answer. `firmware/se_atecc.py` states exactly which half of this is silicon and which is arithmetic.
-
-### If the case comes open
-
-Opening the case is how firmware gets replaced, so the chamber answers for itself. A ground-glass diffuser is epoxied into the optical chamber, and the laser and camera that watch blood clot read its speckle at every unlock. A pattern fixed by microstructure below a micron, which cannot be manufactured to a copy.
-
-That reading is an input to the key that unwraps the seed, not a check the firmware performs. A case that has been opened does not fail a comparison; it derives a different key, and the seed stays shut. Firmware can skip a boolean. It cannot skip a term in a derivation.
-
-Drift is told from tampering rather than both being read as attack: every read is registered against two published reference patches, so a mount that moves with temperature is measured and taken out, and the angle and offset are reported alongside the result. Enrolment is optional, and a device that skips it behaves exactly as it did before. `firmware/optical_puf.py`; `BUILD.md` §9 places the disc.
-
-It costs one habit. The laser is interlocked to the cartridge switch in hardware, so a chamber-enrolled device needs the bay closed at every unlock, including a touch signature, which otherwise involves no cartridge at all. Leave a spent cartridge in the slot between spends. A device that never enrolled a chamber never reads it and never asks.
-
-### Under coercion
-
-Sensing cannot help here. No measurement tells willing blood from coerced blood. A second PIN can. Set one and the device carries two wrapped seeds and two wallets; the duress PIN unlocks, signs and behaves identically, and opens the other one. Both seeds are written whether or not you configure a duress PIN, so the card never says which kind of device this is.
-
-It protects what you sign, not what your device shows: the receive and identity screens are watch-only and still display the primary wallet. `firmware/duress.py` is honest about that, and `VALIDATION.md` carries it as open. Fund the decoy plausibly. An empty one tells the coercer they were given the wrong PIN.
-
-`BUILD.md` §16 carries the full threat model.
+`CellDormancy.sol` reads it in two phases on purpose: a claim releases nothing, it opens a challenge window, and one beacon during that window cancels it. Six months in a drawer is the ordinary case, and fifteen seconds of a fingertip undoes it.
 
 ## The signing stack
 
-The wallet half is implemented here rather than delegated, because the gate has to reach inside it: the tier decision, the confirmation screen and the attestation all depend on what the transaction actually says. It is pure Python with one dependency, `cryptography`, used only for AES-GCM.
+Both chains sign on secp256k1, so one key and one signing core serve both. The wallet half is implemented here rather than delegated because the gate reaches inside it: the tier decision, the confirmation screen and the attestation all depend on what the transaction actually says. Pure Python, with `cryptography` as the only dependency, used for AES-GCM.
 
 | | |
 |---|---|
@@ -190,73 +186,34 @@ The wallet half is implemented here rather than delegated, because the gate has 
 | `eth.py` | RLP and EIP-1559, built on the device from fields it displays |
 | `eip712.py` | EIP-712 typed data for smart accounts, and the EIP-7702 delegation |
 | `beacon.py` | The beacon digest, and the period the owner reads |
-| `seedstore.py` | The seed at rest |
 | `qr.py` | The airgap: animated frames, and reassembly that refuses substitution |
-| `display.py` / `buttons.py` / `camera.py` | The screen, the four buttons, and the only way data gets in |
 | `app.py` | The loop: scan, show, confirm, PIN, gate, sign, emit |
 
-Every one of them is checked against the vectors published in the BIPs, RFC 6979 and the EIPs, not against its own output. The signatures are also compared byte for byte with `embit` and `eth-account` across every script type and six chain ids, and then handed to independent code that has to be *satisfied* rather than merely agree: `python-bitcointx`'s script interpreter runs p2pkh, bare multisig, p2wpkh, p2sh-p2wpkh and p2wsh under the flags a node applies, and libsecp256k1. The implementation Bitcoin Core signs with, checks the taproot key and signature. None of those packages is a dependency; `firmware/test_consensus.py` skips without them.
+The device signs a closed set of operations it can render as readable text, and refuses everything else, including arbitrary EVM calldata. Two consequences look like missing features and are not: a PSBT paying several recipients is refused, because the owner can check one destination character by character and cannot check a total; and every Ethereum field (chain id, nonce, and `gas_limit × max_fee_per_gas`) is on the confirmation screen, with unrecognised chain ids refused.
 
-Multisig has to be registered before it can be signed. Without the co-signers on file, "is this output mine?" can only be answered as "does it contain a key of mine?", and an attacker who controls the coordinator can build a script holding one key of yours and the rest theirs. It hashes correctly, the wallet calls it change, and the balance moves somewhere you cannot spend alone. With the quorum registered the device rebuilds the exact script your co-signers produce and compares it byte for byte. `tools/provision.py multisig` does the registering.
-
-Ethereum can also be signed the way the deployment model actually describes. A transfer out of a registered smart account is an EIP-712 `Execute` message: the account holds the nonce, whoever relays it pays the gas, and the device signs three fields and a domain. `chainId` and `verifyingContract` live in the domain separator, so one signature is pinned to one chain and one deployment, which is more than an EOA signature pins. The account is registered in advance for the same reason a quorum is. Calldata stays refused, so the account's own governance calls are refused with it.
-
-EIP-7702 delegation is supported and blood-locked in every configuration. It moves no value, and it decides what every later signature from that address means. Note what it costs: a delegated EOA keeps its key as a superuser, so a timelock on such an account bounds a relayer and not the key holder. `BUILD.md` §5 draws the line between that and a factory-deployed account.
-
-And `tools/regtest_e2e.py` asks the only question that settles anything on its own: Bitcoin Core funds an address this firmware derived, the firmware signs a PSBT spending it, and Core finalises, accepts and mines the result, p2wpkh, p2sh-p2wpkh, p2pkh, p2tr and p2wsh 2-of-3, on a private regtest chain. It found a real defect the first time it ran: the attestation was written into the PSBT with a malformed proprietary key, and Core rejected the whole document rather than skipping the field.
-
-`tools/evm_e2e.py` is the same question on the other chain. It runs anvil on a private chain with no peers, deploys `CellRegistry` and `CellDormancy`, signs a proof of life for the period the *chain's own clock* says it is, and drives the switch through claim, cancel and release. That last part is what no unit test on either side can reach: the device computes the period in Python and the contract computes it in Solidity, and a disagreement of one period would make every beacon the device ever produces unredeemable.
-
-`firmware/test_wallet.py` and `firmware/test_app.py` are the other half of the argument. They are a list of the ways hardware wallets have actually lost people's money, fee inflation through a lying witness UTXO, change substitution, a co-signer swapped out of a quorum, a key quoted at a path that does not derive it, sighash downgrades, calldata smuggled into a transfer, chain-id replay. Each written as a hostile input, each of which must be refused.
-
-## Where the seed comes from
-
-Most hardware wallets draw the seed from one or two sources you are asked to take on faith. This one draws from three, and the third can be measured.
-
-The kernel CSPRNG and the ATECC608B's hardware RNG are both sound and both opaque: a ring oscillator behind Linux's pool, and Microchip's behind a datasheet paragraph. The laser and the lensless camera already in the device are neither. `provision.py` takes a third term from them and prints the min-entropy it measured on the sample it actually drew, using the two NIST SP 800-90B estimators and taking the smaller.
-
-The easy way to get this wrong is instructive. A speckle image is the optical PUF, reproducible by construction, so a seed drawn from one frame would be the same on every power cycle of that device forever while passing every statistical test. The randomness is not in the pattern. It is in what changes between frames, so the source is the difference between disjoint pairs of them, where the static field cancels and photon shot noise does not.
-
-Nice symmetry, and it is load-bearing: the PUF keeps the cells that are stable and discards the rest, and this wants exactly what it discarded.
-
-All three are XORed. A chamber that is dark, blocked, overexposed or simply absent contributes zeros and says so, and zeros XOR into nothing, so the seed is never weaker for having asked.
+Multisig and smart accounts must be registered before they can be signed. Without the co-signers on file, "is this output mine?" collapses to "does it contain a key of mine?", and a hostile coordinator can build a script holding one key of yours and the rest theirs; it hashes correctly, the wallet calls it change, and the money moves somewhere you cannot spend alone. With the quorum registered the device rebuilds the exact script your co-signers produce and compares it byte for byte. `tools/provision.py multisig` does the registering.
 
 ## Keys and backup
 
 The device holds a standard BIP39 seed, encrypted at rest and unwrapped only after the gate passes. The unwrapping key comes from your PIN and the secure element's own secret, so the encrypted seed is inert on any other machine and recoverable on this one. Back it up on paper or steel as with any hardware wallet. If the device fails, restore to a Ledger, a Trezor or a replacement build.
 
-Both Bitcoin and Ethereum use secp256k1, so one key and one signing core serve both chains.
+The seed itself is drawn from three sources XORed together: the kernel CSPRNG, the ATECC608B's hardware RNG, and the difference between disjoint pairs of speckle frames from the chamber, where the static field cancels and photon shot noise does not. `provision.py` prints the min-entropy it measured on the sample it actually drew. A chamber that is dark, blocked or absent contributes zeros and says so, and zeros XOR into nothing.
 
-The device signs a closed set of operations that it can render as readable text and refuses everything else, including arbitrary EVM calldata.
+## Limits
 
-## Quick start
+Worth reading before you trust it with anything. `BUILD.md` §16 carries the full threat model.
 
-The gate logic runs without hardware.
+**The PIN is what proves who.** The gate only proves that someone alive is present. The PIN is eight digits, required at both tiers, and the secure element's counter increments before it checks, so cutting power mid-guess costs an attempt instead of refunding one. Ten wrong and the device wipes. That is a firmware rule, not silicon. What the chip enforces is a counter that never decreases and stops permanently at 2,097,151, which is why the PIN is eight digits and not six.
 
-```bash
-pip install -r firmware/requirements.txt
-python firmware/run_tests.py           # everything below, in one run
-```
+**The attestation rests on firmware and the tamper seal.** It states that a device holding this key ran the gate; it does not prove the gate passed. This is the same assumption as a TPM quote or a Secure Enclave receipt. Someone who opens the case and extracts the key can sign records without bleeding, so treat it as raising the cost of faking a human. Co-signers register firmware hashes alongside keys, and `verify()` refuses builds it does not recognise.
 
-Or individually:
+**An opened case derives a different key.** A ground-glass diffuser is epoxied into the optical chamber, and the laser and camera that watch blood clot read its speckle at every unlock. That reading is a term in the key that unwraps the seed, so a case that has been opened does not fail a check. It derives a different key, and the seed stays shut. Thermal drift is registered out against two reference patches and reported separately from tampering. Enrolment is optional. It costs one habit: because the laser is interlocked to the cartridge switch in hardware, an enrolled device needs the bay closed at every unlock, so leave a spent cartridge in the slot. `firmware/optical_puf.py`.
 
-```bash
-cd firmware
-python calibrate.py selftest --n 8     # blood tier, 6 gates, 18 sample classes
-python touch_gate.py                   # touch tier, 7 gates
-python policy.py                       # tier rules
-python attest.py                       # attestation, quorum, malformed input
-python secp256k1.py                    # RFC 6979, ECDSA, BIP-340, BIP-341
-python bip32.py                        # BIP-32 vectors, hardened isolation
-python tx.py                           # BIP-143 and BIP-341 sighash vectors
-python eth.py                          # RLP, EIP-1559, recovery
-python test_wallet.py                  # end to end, then every footgun
-python test_app.py                     # the whole loop, driven with fakes
-```
+**Coercion needs a second PIN.** No measurement tells willing blood from coerced blood. Set a duress PIN and the device carries two wrapped seeds and two wallets; the duress PIN unlocks, signs and behaves identically, and opens the other one. Both seeds are written whether or not you configure one, so the card never says which kind of device this is. It protects what you sign, not what your device shows: the receive and identity screens are watch-only and still display the primary wallet. Fund the decoy plausibly. `firmware/duress.py`.
 
-Each spoof class fails at the physically correct gate, and the self-test fails if any gate stops being exercised by at least one class.
+**A prepared laboratory attack is not in scope.** A well-made artificial finger containing a genuine haemoglobin-like absorber, driven by a pump replaying recorded variability, would pass the touch tier. So would a citrated sample recalcified immediately before loading, at the blood tier. Both need your blood, your device and your PIN together.
 
-The `edta` row is the interesting one: anticoagulated tube blood is chemically identical to fresh blood and passes every colour test, then fails at motion arrested because it does not clot in the chamber. That is the claim the design rests on, and it turns replay from a tube in a fridge into an attack that needs your blood, your device and your PIN together. `BUILD.md` §16 draws the exact line.
+**Anyone taking anticoagulants cannot use the blood tier.** Their blood will not clot, and the gate will reject every sample.
 
 ## Repository layout
 
@@ -265,76 +222,37 @@ The `edta` row is the interesting one: anticoagulated tube blood is chemically i
 | `BUILD.md` | Hardware specification: parts, wiring, optics, cartridge, firmware, calibration |
 | `PRINTING.md` | Print runbook: order, checks, post-processing |
 | `BOM.csv` | Bill of materials, by kit, with sourcing notes |
+| `SAFETY.md` | Blood-contact handling. Read it first |
+| `VALIDATION.md` | Verification status: what is tested, by what method |
+| `CONTRIBUTING.md` | What this project actually needs |
 | `firmware/blood_gate.py` | Blood tier, six gates |
 | `firmware/touch_gate.py` | Touch tier, seven gates |
-| `firmware/ops.py` | The closed operation set and its renderer |
-| `firmware/wallet.py` | Provisioning, and the two signing entry points |
-| `firmware/psbt.py` | BIP-174: what the device recomputes rather than trusts |
-| `firmware/tx.py` | Transactions and all three sighash algorithms |
-| `firmware/eth.py` | RLP and EIP-1559, built from displayed fields |
-| `firmware/eip712.py` | The smart-account path: typed data, and what a delegation costs |
-| `firmware/beacon.py` | Proof of life: the attestation with no transaction under it |
-| `firmware/chamber_trng.py` | Seed entropy from the chamber, and the health tests it has to pass |
-| `firmware/ring.py` | The attestation with the device's name taken off it |
-| `firmware/secp256k1.py` | The curve both chains sign on |
-| `firmware/hashes.py` | RIPEMD-160 and Keccak-256, because the standard library will not |
-| `firmware/bip32.py` / `bip39.py` | HD derivation and the mnemonic |
-| `firmware/addresses.py` | bech32/bech32m, script types, EIP-55 |
-| `firmware/seedstore.py` | The seed at rest |
-| `firmware/qr.py` | The airgap: framing and reassembly |
-| `firmware/display.py` | The ST7789 panel, and the layout limits it must not undo |
-| `firmware/buttons.py` | Four buttons, and the one that means consent |
-| `firmware/camera.py` | QR capture, and the only way data gets in |
-| `firmware/app.py` | The loop, as a person uses it |
-| `firmware/test_app.py` | The whole device, driven end to end with fakes |
-| `firmware/se_atecc.py` | ATECC608B driver. CheckMac PIN, duress slots. Unverified until probed on hardware |
-| `tools/atecc_config.py` | Builds, shows, writes, verifies and locks the chip's config zone |
-| `firmware/duress.py` | The second PIN, and why its use has to be unfalsifiable |
-| `firmware/test_wallet.py` | End to end, and every footgun we could name |
-| `firmware/test_se_atecc.py` | The chip driver's arithmetic, against a fake chip |
-| `firmware/test_curve.py` | The fast scalar multiplies against the definition they replaced |
-| `firmware/test_drivers.py` | Do we call the hardware libraries correctly |
-| `firmware/test_consensus.py` | An independent interpreter runs our scripts |
-| `firmware/signer.py` | The unlock chain: policy, confirm, PIN, gate, sign, attest |
-| `firmware/se.py` | Secure element interface and a software stub for tests |
-| `firmware/policy.py` | Tier selection and escalation rules |
-| `firmware/attest.py` | Tier attestation and quorum verification |
 | `firmware/calibrate.py` | Spoof-panel harness for both tiers, and the synthetic self-test |
-| `firmware/hardware.py` | Sensor drivers. Untested; includes a bring-up checklist |
+| `firmware/hardware.py` | Sensor drivers, and a bring-up checklist |
+| `firmware/policy.py` | Tier selection and escalation rules |
+| `firmware/signer.py` | The unlock chain: policy, confirm, PIN, gate, sign, attest |
+| `firmware/attest.py` | Tier attestation and quorum verification |
+| `firmware/ring.py` | The attestation with the device's name taken off it |
+| `firmware/beacon.py` | Proof of life: the attestation with no transaction under it |
+| `firmware/duress.py` | The second PIN |
+| `firmware/optical_puf.py` | The chamber as a tamper boundary |
+| `firmware/chamber_trng.py` | Seed entropy from the chamber, and its health tests |
+| `firmware/se_atecc.py` | ATECC608B driver: CheckMac PIN, duress slots |
+| `firmware/wallet.py` | Provisioning, and the two signing entry points |
+| `firmware/app.py` | The loop, as a person uses it |
 | `firmware/run_tests.py` | Every self-test in one run. What CI runs |
 | `tools/provision.py` | Choose a seed, wrap it, record the watch-only accounts |
-| `tools/cell.service` | The systemd unit that starts the loop at boot |
+| `tools/gen_printables.py` | Generates every printable part, checks it, writes the manifest |
+| `tools/gen_enclosure.py` | The inside of the two shells, and the fit checks |
 | `tools/bench.py` | The checks only the built device can answer |
 | `tools/regtest_e2e.py` | Sign with the firmware, make Bitcoin Core accept it |
 | `tools/evm_e2e.py` | Deploy the contracts, make a node accept a beacon the firmware signed |
-| `tools/export_model.py` | Re-exports `instrument.obj` from `viewer/model.js` |
-| `tools/render_turntable.py` | Renders the turntable GIF/MP4 from the same model |
-| `tools/gen_wiring.py` | Draws the Phase 1 wiring sheet from BUILD.md §11 |
-| `tools/gen_mechanical.py` | Regenerates `diagrams/mechanical.svg` from the mesh |
-| `tools/gen_printables.py` | Generates every printable part, checks it, writes the manifest |
-| `tools/gen_enclosure.py` | The inside of the two shells, and the fit checks |
 | `contracts/` | On-chain verification of the attestation record, and the registry |
-| `models/` | Enclosure mesh, coordinate convention, regeneration |
 | `models/print/` | The eleven printable STLs and their generated manifest |
+| `viewer/` | Parametric three.js model of the enclosure |
 | `diagrams/` | Explainer, build sheet, dimensioned drawings |
-| `viewer/` | Parametric three.js model. The source `instrument.obj` is exported from |
-| `VALIDATION.md` | Verification status: what is tested, by what method |
-| `SAFETY.md` | Blood-contact handling. Read it first |
-| `CONTRIBUTING.md` | What this project actually needs |
-
-## Building one
 
 <img src="diagrams/build-sheet.svg" alt="Build sheet: parts, optical head, cartridge" width="100%">
-
-`BUILD.md` §2 splits the build into two kits, and every row of `BOM.csv` says which kit it belongs to. The reader kit is $63 of hardware plus $31 of consumables: a Pi, a spectrometer, a laser, a camera, a printed chamber, cartridges, and the lancets and film to run them. It has no security requirements because it signs nothing, and it answers the only question that determines whether the rest is worth building. The wallet kit adds the signing half for a further $34.70.
-
-A touch signature costs nothing to make. A blood signature spends a lancet, an alcohol pad, a PET window and a printed cartridge, about twenty cents, restocked from any pharmacy. Nothing in the device is consumed by either, and nothing on the bill of materials has a shelf life.
-
-Eleven parts are printed, all from `python3 tools/gen_printables.py`, all checked before they are written. `PRINTING.md` is the runbook. What to print in what order, what to check off each stage, and the post-processing the device does not work without.
-
-## Safety
-
-Read `SAFETY.md` before the first build. In summary: use commercial sterile single-use lancets, dispose of each cartridge and lancet in a sharps container, and never share a device between people. Anyone taking anticoagulants cannot use the blood tier, because their blood will not clot and the gate will reject every sample.
 
 ## Licence
 

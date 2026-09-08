@@ -4,7 +4,22 @@ Single device, $97.45 in hardware plus $31.00 of consumables, Raspberry Pi Zero 
 
 The enclosure comes from `viewer/model.js`, a parametric three.js model. `models/instrument.obj` is its export, 104 named objects with materials, 116.2 × 73.2 × 28.3 mm, and `diagrams/mechanical.svg` is generated from that by `tools/gen_mechanical.py`, so the drawing cannot drift from the model. See §10.
 
-This specification is complete enough to build from. Sensing thresholds ship as physics-derived defaults and are calibrated to your hardware in §13. The same step any instrument needs before it is trusted. `VALIDATION.md` is the engineering status record. Use testnet until you have run the calibration.
+Sensing thresholds ship as physics-derived defaults and are calibrated to your hardware in §13, the step any instrument needs before it is trusted. `VALIDATION.md` is the engineering status record. Use testnet until you have run the calibration.
+
+## Where to start
+
+Read §1 and §2, order the reader kit, then work through §15's build order. The rest of this document is reference: come back to a section when the build order sends you there.
+
+| | Sections |
+|---|---|
+| **What it is and what it costs** | §1 what you're building · §2 the two kits · §6 parts, and what to insist on when buying |
+| **How it decides** | §3 sensing architecture · §4 the two tiers and the policy between them · §7 the six blood gates |
+| **What to make** | §8 the cartridge · §9 optical head · §10 enclosure · §11 wiring |
+| **What to install** | §12 firmware, from a blank SD card to a running device |
+| **What to do once** | §13 calibration · §15 build order, milestone by milestone |
+| **Before you trust it** | §5 deployment model and pre-flight · §14 safety · §16 threat model and design limits |
+
+`PRINTING.md` is the print runbook and `BOM.csv` is the shopping list. Both are driven by the same constants as this document.
 
 ---
 

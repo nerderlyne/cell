@@ -108,9 +108,22 @@ build and one set of eyes on it.
 Anything involving blood: `SAFETY.md` first. One device per person, one lancet
 per use, sharps container.
 
-The drawings are generated. `diagrams/mechanical.svg` comes from
-`tools/gen_mechanical.py` and CI fails if they drift. If you change the model,
-re-run the generator in the same commit.
+Some drawings are generated and some are drawn by hand, and the difference
+decides what you have to do after a change.
+
+| Drawing | Source |
+|---|---|
+| `diagrams/mechanical.svg` | `tools/gen_mechanical.py`, from the exported mesh |
+| `diagrams/wiring.svg` | `tools/gen_wiring.py`, from BUILD.md's pin table |
+| `diagrams/turntable.gif` / `.mp4` | `tools/render_turntable.py`, from `viewer/model.js` |
+| `diagrams/social-card.png` | `tools/render_social_card.py`, from the same model |
+| `diagrams/build-sheet.svg` | Hand-drawn |
+| `diagrams/how-it-works.svg` | Hand-drawn |
+
+Change the model and you re-run the generators in the same commit; CI fails if
+you do not. The two hand-drawn sheets have no generator, so the numbers on them
+are checked against their sources by `firmware/run_tests.py` instead. If you put
+a new dimension or price on one, add a check for it there.
 
 ```bash
 pip install -r firmware/requirements.txt
