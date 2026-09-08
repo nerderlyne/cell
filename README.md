@@ -16,11 +16,17 @@ python3 -m http.server -d viewer 8000     # then open localhost:8000/instrument.
 
 Orbit it, and export OBJ or glTF straight from the viewer. `diagrams/turntable.mp4` is the same render as h.264, which holds more detail on a dark subject than the GIF does. The turntable above is rendered from that same model by `tools/render_turntable.py`, so it cannot show something the geometry does not. `models/README.md` documents the pipeline and the coordinate convention.
 
+## Someone built one
+
+**[Austin Griffith built a prototype and signed a transaction with fresh blood.](https://x.com/austingriffith/status/2097231722094191031)** Video, September 2026.
+
+The first one outside this repository: assembled hardware, a sample in the chamber, and a signature that happened because the blood gate passed. No captures from that build have been contributed here, so every row in `VALIDATION.md` stands where it was, and the rows waiting on hardware still want the panel numbers behind them.
+
 ## Status
 
 The design is complete and the firmware self-tests on every commit: 46 suites covering the signing stack against published test vectors, both liveness gates, the whole device loop, and the documented build sequence driven end to end. Bitcoin Core accepts and mines what it signs.
 
-Nothing has been built on a bench yet. The sensor head, the panel, the buttons and the gate chip are written but unverified against hardware, `VALIDATION.md` lists each one and what closes it. Start with the reader kit: $62 of hardware plus $31 of consumables, and a weekend proves the sensing before you spend anything on the wallet half. **There's a [bounty](https://poidh.xyz/mainnet/bounty/24) for building one and signing with it. `BOUNTY.md` says what a claim looks like, and a reader-only run counts.**
+The sensor head, the panel, the buttons and the gate chip are written but unverified against hardware here, and `VALIDATION.md` lists each one and what closes it. Start with the reader kit: $62 of hardware plus $31 of consumables, and a weekend proves the sensing before you spend anything on the wallet half. **There's a [bounty](https://poidh.xyz/mainnet/bounty/24) for building one and signing with it. `BOUNTY.md` says what a claim looks like, and a reader-only run counts.**
 
 Sensing thresholds ship as physics-derived defaults and are calibrated to your hardware on first build. `calibrate.py` runs the spoof panel for both tiers, sets every threshold from your own samples, and writes a file the device loads. Touch sessions are 15 seconds each, so that half of the calibration is minutes of work. `BUILD.md` §13 is the procedure. `VALIDATION.md` tracks exactly what has been measured.
 
@@ -121,66 +127,25 @@ Implementation in `firmware/attest.py`.
 
 ## One of these devices bled, and you cannot tell which
 
-The record in `attest.py` carries the device's own key, so publishing one says
-"this address is a CELL device, and this action was authorised with blood".
-That is why the default is to strip it, and it throws away the part of this
-design with the widest reach.
+Stripping the record throws away the part of this design with the widest reach. The claim worth publishing is not "device 7 bled" but "a human bled", and an allowlist, a mint or a quorum vote wants the second one without the first.
 
-The interesting claim is not "device 7 bled". It is "a human bled", and that is
-a rate limit denominated in something nobody can buy more of. A script produces
-a million signatures. A body produces about two a day, each costing a lancet
-and ten minutes. Allowlists, mints, quorum votes and one-human-one-action all
-want exactly that, and none of them want to know which device.
+`firmware/ring.py` signs the claim as one member of a registered set, using LSAG over the same secp256k1 everything else here signs on. A key image `I = d · H(event ‖ P)` makes two claims from one device in one event link, so nobody votes twice — and makes claims in different events unlinkable, so nobody accumulates a voting history. That second half is the one people get wrong, and it is the difference between resisting sybils and publishing a dossier.
 
-`firmware/ring.py` signs the claim as one member of a registered set, using
-LSAG over the same secp256k1 everything else here signs on. A key image
-`I = d · H(event ‖ P)` makes two claims from one device in one event link, so
-nobody votes twice — and makes claims in different events unlinkable, so
-nobody accumulates a voting history. That second half is the one people get
-wrong, and it is the difference between resisting sybils and publishing a
-dossier.
+The firmware and calibration hashes are deliberately absent from this claim. They are what makes the ordinary record auditable, and they are exactly what would narrow a ring of forty to a ring of three. What replaces them is the ring: a verifier admits a set of keys, and it already checked their firmware when it registered them.
 
-The firmware and calibration hashes are deliberately absent from this claim.
-They are what makes the ordinary record auditable, and they are exactly what
-would narrow a ring of forty to a ring of three. What replaces them is the
-ring: a verifier admits a set of keys, and it already checked their firmware
-when it registered them.
-
-Both halves cost about 2n scalar multiplications for a ring of n, which is
-slow in pure Python and does not matter, because the ring computes while the
-sample clots. It is not cheap enough to verify on chain; use it off chain or
-in an allowlist a coordinator maintains.
+Both halves cost about 2n scalar multiplications for a ring of n, which is slow in pure Python and does not matter, because the ring computes while the sample clots. It is not cheap enough to verify on chain; use it off chain or in an allowlist a coordinator maintains.
 
 ## Proof of life
 
-Every dead-man switch in self-custody keys off signing activity, which answers
-the wrong question. "This key moved" is not "this person is alive": a stolen
-key resets the clock, and an owner who simply does not spend for a year looks
-dead. The touch gate measures a body, so CELL can separate them.
+Every dead-man switch in self-custody keys off signing activity, which answers the wrong question. "This key moved" is not "this person is alive": a stolen key resets the clock, and an owner who simply does not spend for a year looks dead. The touch gate measures a body, so CELL can separate them.
 
-A beacon is the attestation with no transaction under it. Fifteen seconds, no
-consumable, nothing signed with the seed. `CellRegistry.heartbeat` writes down
-when a living human was last proven present, and anything that needs to know
-can read it: an inheritance path, a recovery quorum, a multisig that wants a
-co-signer's pulse before treating them as present.
+A beacon is the attestation with no transaction under it. Fifteen seconds, no consumable, nothing signed with the seed. `CellRegistry.heartbeat` writes down when a living human was last proven present, and anything that needs to know can read it: an inheritance path, a recovery quorum, a multisig that wants a co-signer's pulse before treating them as present.
 
-Nothing new is signed. `actionDigest` already commits to the chain, the
-contract and the claimant, and takes a purpose word. The beacon is that
-function with a purpose carrying a period index, so it is the same record
-format, the same key and the same curve.
+Nothing new is signed. `actionDigest` already commits to the chain, the contract and the claimant, and takes a purpose word. The beacon is that function with a purpose carrying a period index, so it is the same record format, the same key and the same curve.
 
-**The date on the screen is the security control.** The device has no clock and
-does not pretend to. The period comes from the companion and is displayed as a
-date range, so the owner is the clock, and `heartbeat` accepts a beacon only
-while its period is the current one. A record harvested for a future period
-cannot be spent early and cannot be spent late. What remains is that a
-companion which tricks the owner into approving N future periods can keep a
-dead owner alive for N periods, at one gate and one wrong date each.
+**The date on the screen is the security control.** The device has no clock and does not pretend to. The period comes from the companion and is displayed as a date range, so the owner is the clock, and `heartbeat` accepts a beacon only while its period is the current one. A record harvested for a future period cannot be spent early and cannot be spent late. What remains is that a companion which tricks the owner into approving N future periods can keep a dead owner alive for N periods, at one gate and one wrong date each.
 
-`CellDormancy.sol` is the switch that reads it, in two phases on purpose. A
-claim releases nothing; it opens a challenge window, and one beacon during that
-window cancels it. A device that spent six months in a drawer is the ordinary
-case, not the attack, and fifteen seconds of a fingertip undoes it.
+`CellDormancy.sol` is the switch that reads it, in two phases on purpose. A claim releases nothing; it opens a challenge window, and one beacon during that window cancels it. A device that spent six months in a drawer is the ordinary case, not the attack, and fifteen seconds of a fingertip undoes it.
 
 ## What it protects against
 
@@ -236,35 +201,21 @@ EIP-7702 delegation is supported and blood-locked in every configuration. It mov
 
 And `tools/regtest_e2e.py` asks the only question that settles anything on its own: Bitcoin Core funds an address this firmware derived, the firmware signs a PSBT spending it, and Core finalises, accepts and mines the result, p2wpkh, p2sh-p2wpkh, p2pkh, p2tr and p2wsh 2-of-3, on a private regtest chain. It found a real defect the first time it ran: the attestation was written into the PSBT with a malformed proprietary key, and Core rejected the whole document rather than skipping the field.
 
+`tools/evm_e2e.py` is the same question on the other chain. It runs anvil on a private chain with no peers, deploys `CellRegistry` and `CellDormancy`, signs a proof of life for the period the *chain's own clock* says it is, and drives the switch through claim, cancel and release. That last part is what no unit test on either side can reach: the device computes the period in Python and the contract computes it in Solidity, and a disagreement of one period would make every beacon the device ever produces unredeemable.
+
 `firmware/test_wallet.py` and `firmware/test_app.py` are the other half of the argument. They are a list of the ways hardware wallets have actually lost people's money, fee inflation through a lying witness UTXO, change substitution, a co-signer swapped out of a quorum, a key quoted at a path that does not derive it, sighash downgrades, calldata smuggled into a transfer, chain-id replay. Each written as a hostile input, each of which must be refused.
 
 ## Where the seed comes from
 
-Most hardware wallets draw the seed from one or two sources you are asked to
-take on faith. This one draws from three, and the third can be measured.
+Most hardware wallets draw the seed from one or two sources you are asked to take on faith. This one draws from three, and the third can be measured.
 
-The kernel CSPRNG and the ATECC608B's hardware RNG are both sound and both
-opaque: a ring oscillator behind Linux's pool, and Microchip's behind a
-datasheet paragraph. The laser and the lensless camera already in the device
-are neither. `provision.py` takes a third term from them and prints the
-min-entropy it measured on the sample it actually drew, using the two NIST SP
-800-90B estimators and taking the smaller.
+The kernel CSPRNG and the ATECC608B's hardware RNG are both sound and both opaque: a ring oscillator behind Linux's pool, and Microchip's behind a datasheet paragraph. The laser and the lensless camera already in the device are neither. `provision.py` takes a third term from them and prints the min-entropy it measured on the sample it actually drew, using the two NIST SP 800-90B estimators and taking the smaller.
 
-The easy way to get this wrong is instructive. A speckle image is the optical
-PUF, reproducible by construction, so a seed drawn from one frame would be the
-same on every power cycle of that device forever while passing every
-statistical test. The randomness is not in the pattern. It is in what changes
-between frames, so the source is the difference between disjoint pairs of
-them, where the static field cancels and photon shot noise does not.
+The easy way to get this wrong is instructive. A speckle image is the optical PUF, reproducible by construction, so a seed drawn from one frame would be the same on every power cycle of that device forever while passing every statistical test. The randomness is not in the pattern. It is in what changes between frames, so the source is the difference between disjoint pairs of them, where the static field cancels and photon shot noise does not.
 
-Nice symmetry, and it is load-bearing: the PUF keeps the cells that are stable
-and discards the rest, and this wants exactly what it discarded.
+Nice symmetry, and it is load-bearing: the PUF keeps the cells that are stable and discards the rest, and this wants exactly what it discarded.
 
-All three are XORed. A chamber that is dark, blocked, overexposed or simply
-absent contributes zeros and says so, and zeros XOR into nothing, so the seed
-is never weaker for having asked.
-
-`tools/evm_e2e.py` is the same question on the other chain. It runs anvil on a private chain with no peers, deploys `CellRegistry` and `CellDormancy`, signs a proof of life for the period the *chain's own clock* says it is, and drives the switch through claim, cancel and release. That last part is what no unit test on either side can reach: the device computes the period in Python and the contract computes it in Solidity, and a disagreement of one period would make every beacon the device ever produces unredeemable.
+All three are XORed. A chamber that is dark, blocked, overexposed or simply absent contributes zeros and says so, and zeros XOR into nothing, so the seed is never weaker for having asked.
 
 ## Keys and backup
 
@@ -299,8 +250,7 @@ python test_wallet.py                  # end to end, then every footgun
 python test_app.py                     # the whole loop, driven with fakes
 ```
 
-Each spoof class fails at the physically correct gate, and the self-test fails
-if any gate stops being exercised by at least one class.
+Each spoof class fails at the physically correct gate, and the self-test fails if any gate stops being exercised by at least one class.
 
 The `edta` row is the interesting one: anticoagulated tube blood is chemically identical to fresh blood and passes every colour test, then fails at motion arrested because it does not clot in the chamber. That is the claim the design rests on, and it turns replay from a tube in a fridge into an attack that needs your blood, your device and your PIN together. `BUILD.md` §16 draws the exact line.
 

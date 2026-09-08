@@ -4,6 +4,10 @@ Everything you need to build one is in this repo.
 
 **Build the device. Sign with a pulse. Sign with fresh blood. Post pictures.**
 
+**Somebody has.** [Austin Griffith built a prototype and signed with fresh
+blood](https://x.com/austingriffith/status/2097231722094191031) — video,
+September 2026. The bounty is still open, and everything below still stands.
+
 **[Bounty 24 on poidh](https://poidh.xyz/mainnet/bounty/24)**, on mainnet. It
 is topped up over time, so the listing carries the amount and this file
 deliberately does not.

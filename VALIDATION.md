@@ -9,6 +9,14 @@ the thresholds ship as physics-derived defaults, and `calibrate.py` replaces
 them with values measured on your own optics, your own printer and your own
 samples. That step is one of the build milestones in `BUILD.md` §15.
 
+## Built, on video
+
+[A prototype has been built and used to sign behind the blood
+gate](https://x.com/austingriffith/status/2097231722094191031) — video,
+September 2026. No captures, thresholds or panel runs from that build have
+been contributed here, so no row below moves on it: a video shows that it
+worked once, not what it measured.
+
 ---
 
 ## Verified in CI, every commit
@@ -474,22 +482,22 @@ Milestone 5 in `BUILD.md` §15, spectrum of dye against your own blood, is the
 
 ## Not yet built
 
-- **Duress, on the read-only screens.** Signing is closed on both chains: two
-  PINs, two wrapped seeds, two recorded wallets, and `test_wallet.py` drives
-  both through the whole device. The decoy signs with the decoy's key, its
-  change is recognised as its own, and crossing the wires refuses. Ethereum
-  reaches the same place by a different route, because an EIP-1559 request
-  carries no key origin to select on: `EthereumSpend` never renders the sender,
-  so the wallet is chosen by the seed that opened rather than before the PIN.
-  What is NOT closed is
-  what the device *displays*. IDLE, RECEIVE and THIS DEVICE are watch-only and
-  need no PIN, so they show the primary wallet's fingerprint and addresses. A
-  coercer who says "show me your receive address" is shown the real wallet, and
-  a duress signature will not match it. Closing it means those screens asking
-  for a PIN first, which trades a real usability property against a threat that
-  only applies under coercion. A decision for whoever builds this, not one to
-  make silently. Until then: the duress PIN protects what you SIGN, not what
-  your device SHOWS.
+- **Duress, on the read-only screens.** Signing is closed on both chains:
+  two PINs, two wrapped seeds, two recorded wallets, and `test_wallet.py`
+  drives both through the whole device. The decoy signs with the decoy's
+  key, its change is recognised as its own, and crossing the wires refuses.
+  Ethereum reaches the same place by a different route, because an EIP-1559
+  request carries no key origin to select on: `EthereumSpend` never renders
+  the sender, so the wallet is chosen by the seed that opened rather than
+  before the PIN. What is NOT closed is what the device *displays*. IDLE,
+  RECEIVE and THIS DEVICE are watch-only and need no PIN, so they show the
+  primary wallet's fingerprint and addresses. A coercer who says "show me
+  your receive address" is shown the real wallet, and a duress signature
+  will not match it. Closing it means those screens asking for a PIN first,
+  which trades a real usability property against a threat that only applies
+  under coercion. A decision for whoever builds this, not one to make
+  silently. Until then: the duress PIN protects what you SIGN, not what your
+  device SHOWS.
 
 - **The ATECC608B's ReqAuth binding, on silicon.** `tools/atecc_config.py`
   writes it and `firmware/se_atecc.py` performs the CheckMac it demands, the
