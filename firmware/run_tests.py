@@ -718,6 +718,30 @@ def docs_match_the_code() -> bool:
     bundle = (root / "viewer" / "instrument-standalone.html").read_text()
     want("deployed page price", bundle, f"about ${round(hw)} in parts")
 
+    # The turntable, against the model it is a picture of. Every other
+    # generated artefact is regenerated and diffed by CI; this one cannot be,
+    # because it needs a browser and three quarters of an hour. So the render
+    # writes down what it was made from and this compares. The GIF at the top
+    # of the README had gone three commits stale, through a change that moved
+    # the accent colour and another that repainted the screen, with every job
+    # green the whole time.
+    stamp_path = root / "diagrams" / "turntable.stamp"
+    if not stamp_path.exists():
+        print("    diagrams/turntable.stamp is missing. Run: "
+              "python3 tools/render_turntable.py")
+        ok = False
+    else:
+        import render_turntable as rt                       # noqa: E402
+        recorded = dict(
+            ln.split(None, 1) for ln in stamp_path.read_text().splitlines()
+            if ln and not ln.startswith("#") and len(ln.split(None, 1)) == 2)
+        if recorded.get("sha256") != rt.source_stamp():
+            print("    the turntable is older than the model it shows: "
+                  f"{', '.join(rt.STAMPED)} have changed since it was "
+                  "rendered.\n    Run: python3 tools/render_turntable.py")
+            ok = False
+
+
     if not _docs_references_resolve(root):
         ok = False
 

@@ -1,0 +1,5 @@
+# What diagrams/turntable.gif and .mp4 were rendered from.
+# Regenerate both with: python3 tools/render_turntable.py
+sources viewer/model.js viewer/three-d-stage.js
+finish oxblood
+sha256 c28b9993978523886221bd3aba2ed63c064cf2bb2bd753dd0d5d147e2f253697
