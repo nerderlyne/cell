@@ -64,10 +64,10 @@ temperature. Every gate in the device is normalised against this surface.
 
 ### Stage 2: the cartridge batch
 
-Plate them, plus one `cartridge_reference.stl` and one
-`cartridge_null.stl`. Twenty-two at 51 × 14 mm is three plates on a
-130 × 90 bed, so run the plates back to back on the one spool. That is [BUILD.md §15](BUILD.md) milestone 3. It is a
-measurement and not a stockpile: read the white patch on all 20 and require
+Plate them, plus one `cartridge_reference.stl` and one `cartridge_null.stl`.
+Twenty-two at 51 × 14 mm is three plates on a 130 × 90 bed, so run the plates
+back to back on the one spool. That is [BUILD.md §15](BUILD.md) milestone 3. It
+is a measurement and not a stockpile: read the white patch on all 20 and require
 **under 3% spread after normalisation**. Cartridges that do not agree with each
 other will not agree with themselves next month. Fix the printer here.
 

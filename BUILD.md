@@ -449,7 +449,7 @@ For a device used twice a year, forgetting the PIN is a more likely loss event t
 | Cartridge switch | SPDT snap-action microswitch, lever | 0.50 | Reader kit. GPIO22, and the laser interlock (§9) |
 | Power | USB-C breakout, power only | 2 | **No battery**, see §2. Desolder D+/D− or use a data blocker. **Confirm it carries 5.1 kΩ CC pulldowns**, see §11 |
 | Storage | 16 GB A2 microSD | 6 | |
-| Test cartridges | Printed once, sealed, kept with the device | 0 | Wallet kit. REFERENCE + NULL, see §4 |
+| Test cartridges | Printed once, sealed, kept with the device | 0 | Wallet kit. REFERENCE + NULL, see §5 |
 | Filament | PETG black ~90 g, white ~60 g | 5 | Not PLA |
 | Fasteners | M2.5×8 + heat-set inserts ×6 | 3 | |
 | Ring window | Ø10 × 0.5 mm clear acrylic or glass disc | 1 | Seals the chamber, contact surface for touch mode |
@@ -1365,7 +1365,7 @@ A sequence of checks, not a schedule, with the parts in front of you this is a w
 | 10a | Chamber enrolled (optional) | `provision.py enroll-chamber`. The seed re-wraps and still reopens. Back up `chamber.npz` beside the words |
 | 11 | Regtest round trip | `tools/regtest_e2e.py`. Core accepts and mines what the device signed |
 | 12 | Testnet round trip, gate in the loop | Coins move, and only after a real sample |
-| 13 | Seal the REFERENCE and NULL cartridges, record baselines | Both behave per §2 |
+| 13 | Seal the REFERENCE and NULL cartridges, record baselines | Both behave per §5 |
 | 14 | Restore drill | Wipe the device, restore the seed from your paper backup, spend again |
 
 
