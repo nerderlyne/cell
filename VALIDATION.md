@@ -653,18 +653,32 @@ Milestone 5 in `BUILD.md` §15, spectrum of dye against your own blood, is the
   --behaviour` asks the chip directly, and it must be run before `lock-data`,
   while a wrong answer is still recoverable.
 
-- **PIN guessing through raw chip commands.** Unresolved. Ten attempts is
-  enforced by firmware, not by the chip's PIN slots. LimitedUse is configured
-  on the wrapping slots, while the PIN slots permit unmetered cryptographic
-  use. A caller can bypass `verify_pin` and test candidates directly; an
-  exposed MAC/HMAC under a PIN-derived key can provide an offline verifier.
-  The counter ceiling is not a bound on guesses. Before claiming a fix,
-  obtain the full manufacturer command restrictions and test failed CheckMac
-  calls with Counter0 read before and after, plus MAC, HMAC, SHA-HMAC and
-  derived-state paths for reusable verification outputs. Both PIN slots must
-  behave identically. Check the actual policy at startup and reject obsolete
-  configurations; a locked config zone cannot be upgraded in place. Existing
-  fake-chip and `verify --behaviour` tests do not establish these properties.
+- **PIN-v2 on real hardware.** The software remediation replaces public PIN
+  hashes with verifiers derived through a random, metered slot-7 HMAC key.
+  Startup rejects any different slot policy, including enabled CheckMac Copy
+  or writable derivation destinations. NoMac blocks PIN-slot response export.
+  Host regressions cover raw MAC-to-CheckMac replay, denied PIN-slot HMACs,
+  candidate charging, counter exhaustion, both PIN
+  roles and refusal of an unmetered result before comparison. The ten-entry
+  firmware wipe is separate from the remaining Counter0 hardware budget.
+  Physical acceptance remains outstanding: run `verify --behaviour` after
+  data lock for repeated HMAC charges, denied keyed-context export and denied
+  repeated finalization. Also test exhaustion, power interruption, direct
+  MAC/KDF/GenDig and CheckMac-copy paths on a sacrificial chip. PIN-slot MAC
+  responses must not be obtainable through derived TempKey states. Complete
+  normal and duress unlocks after the probes. A fake cannot establish these
+  silicon properties, and the bench probes deliberately fail on API errors.
+  Also validate the provisioning lock order: the existing runbook attempts
+  HMAC and encrypted baseline writes before data lock, although those chip
+  commands require it. Host provisioning fakes do not model that restriction.
+
+  The policy follows Microchip's ATECC608A full datasheet §4.4.5 (LimitedUse)
+  and §11.19 (HMAC state), together with the ATECC608B summary §4.1 statement
+  that configurations remain functionally identical. The public B TrustFLEX
+  datasheet §5.1.8.3 independently restricts context export to plain SHA256.
+  Sources: [manufacturer-authored A datasheet, mirrored](https://news.bit2me.com/wp-content/uploads/2020/08/ATECC608A-chip-ColdCard.pdf),
+  [B compatibility](https://ww1.microchip.com/downloads/en/DeviceDoc/ATECC608B-CryptoAuthentication-Device-Summary-Data-Sheet-DS40002239B.pdf),
+  [B command documentation](https://ww1.microchip.com/downloads/en/DeviceDoc/ATECC608B-TFLXTLS-CryptoAuthentication-Data-Sheet-DS40002249A.pdf).
 - **A constant-time signing core.** There is not one, by decision rather than
   by oversight. `secp256k1.py` is pure Python affine and Jacobian arithmetic
   that branches on the scalar's bits, and the fixed-base table indexes on the

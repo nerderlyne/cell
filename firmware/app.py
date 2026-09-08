@@ -62,9 +62,9 @@ from policy import Policy, Tier
 from se import PinLockout, SecureElement
 from wallet import Provisioning, WalletError
 
-# Eight digits are the input format. The ten-attempt budget is enforced by
-# firmware; the current PIN-slot configuration does not establish a hardware
-# guess limit against raw chip commands. See se_atecc.py and VALIDATION.md.
+# Eight digits are the input format. PIN-v2 charges a chip-counter use for
+# each candidate derivation; the ten-attempt wipe remains firmware policy.
+# See se_atecc.py and VALIDATION.md for the hardware validation requirements.
 PIN_LENGTH = 8
 
 

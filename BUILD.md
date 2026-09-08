@@ -1637,12 +1637,17 @@ with no sensor head provisions exactly as it did before.
 |---|---|---|
 | 0 | Wrapping secret | Secret, HMAC use only, **ReqAuth → slot 2**, metered by Counter0 |
 | 1 | Attestation secret | Secret, HMAC use only, no authorisation. The idle screen must be able to show the pubkey |
-| 2 | Normal PIN key | Secret. Holds `SHA-256("CELL/pin/v1" ‖ serial ‖ PIN)` |
+| 2 | Normal PIN key | Secret. Holds the PIN-v2 verifier derived through slot 7 |
 | 3 | Normal PIN baseline | Clear read, **encrypted write under slot 2** |
 | 4 | Duress PIN key | Secret. Identical configuration to slot 2 |
 | 5 | Decoy wrapping secret | Secret, HMAC use only, **ReqAuth → slot 4** |
 | 6 | Duress PIN baseline | Clear read, encrypted write under slot 4 |
-| 7–15 | Nothing | Secret and unwritable, so nothing else can use them as scratch |
+| 7 | PIN derivation secret | Random HMAC key, metered by Counter0, no reads or later writes |
+| 8–15 | Nothing | Secret and unwritable, so nothing else can use them as scratch |
+
+Every slot disables CheckMac Copy. Firmware checks the complete slot policy
+at startup, including unused slots that could otherwise serve as destinations.
+This is an unreleased provisioning-format change; start with a fresh chip.
 
 The procedure, in this order:
 
@@ -1670,7 +1675,7 @@ Both agree exactly today. That retires most of the transcription risk. Two indep
 
 **ReqAuth is the line to get right.** Slot 0 must refuse to derive until a CheckMac against slot 2 has just succeeded. Skip it and the PIN counter does nothing: an attacker never calls `verify_pin` at all, they call the derive once per candidate PIN and let AES-GCM's tag tell them when they are right.
 
-**The PIN command boundary remains open.** The ten-attempt limit is firmware arithmetic over a monotonic counter and an encrypted baseline. Counter0 bounds operations on the configured wrapping slots, but the PIN slots are separately configured without metering and allow verification commands. An attacker who issues chip commands directly need not call `verify_pin` or attempt a derive for each guess. The counter ceiling therefore does not bound PIN guesses. A known-message MAC under a PIN-derived key can also expose an offline verifier. Do not rely on this configuration for resistance to an opened-device PIN attack. Closing this requires the full ATECC608B command restrictions and physical tests of failed CheckMac metering, MAC/HMAC output restrictions and alternate command paths; changing configuration bits based only on a fake-chip test is insufficient. Already locked configurations cannot be rewritten.
+**PIN-v2 charges for candidate derivation.** Slot 7 holds a random secret that is used by SHA-HMAC with LimitedUse enabled. The PIN verifier combines that HMAC with the domain-separated PIN input. A raw CheckMac or known-message MAC against slots 2/4 therefore cannot test a candidate computed from only the PIN and public serial. Each candidate needs a metered slot-7 operation first. The driver checks that it consumed one Counter0 use. Ten failed entries still trigger a firmware wipe; direct chip access is bounded by the remaining counter capacity, not ten guesses. `verify --behaviour` on a data-locked device checks repeated derivation charges, denied HMAC-context export and denied repeated finalization. It consumes counter uses. The remaining physical acceptance tests are in `VALIDATION.md`; host tests are not silicon evidence.
 
 One design difference is worth naming, because it is where the gate lives. SeedSigner is stateless: it re-derives from a seed you type in each time, so there is nothing on the device to gate. CELL stores the seed encrypted and gates its decryption, which is what lets a liveness proof stand between an attacker and a key that is already there.
 
@@ -1886,7 +1891,7 @@ Stated so co-signers and reviewers can reason about them directly.
 
 **Physical possession of both device and PIN is the boundary.** As with every hardware wallet, hold what you would not be attacked for, and use the multisig quorum in §4 when the amount justifies it. `verify_quorum()` makes "everyone signed with blood" a mechanical check.
 
-**No secure boot, and what stands in for it.** An attacker who opens the case can replace the firmware, return the device, and let the owner type the PIN into it. The current ATECC608B configuration does not establish a hardware PIN-guess limit, as §12 explains. It also cannot protect a PIN willingly entered into replaced firmware. What answers this is the chamber diffuser in §9: its speckle is an input to the seed-wrapping KDF, not a check, so opening the case does not fail a comparison, it derives a different key. Firmware can skip a boolean; it cannot skip a term in a derivation. For that to bind, the microSD must sit inside the sealed volume, otherwise the card comes out without the optics being disturbed. Enrolment is optional and a device without it behaves exactly as before. Move to a CM4 if you want a verified boot chain rather than a tamper-responsive one; the Pi Zero 2 W has no secure boot.
+**No secure boot, and what stands in for it.** An attacker who opens the case can replace the firmware, return the device, and let the owner type the PIN into it. PIN-v2 meters candidate derivation as §12 explains, but cannot protect a PIN willingly entered into replaced firmware. What answers this is the chamber diffuser in §9: its speckle is an input to the seed-wrapping KDF, not a check, so opening the case does not fail a comparison, it derives a different key. Firmware can skip a boolean; it cannot skip a term in a derivation. For that to bind, the microSD must sit inside the sealed volume, otherwise the card comes out without the optics being disturbed. Enrolment is optional and a device without it behaves exactly as before. Move to a CM4 if you want a verified boot chain rather than a tamper-responsive one; the Pi Zero 2 W has no secure boot.
 
 **Attestation trusts the firmware and the tamper seal.** Same assumption as a TPM quote or a Secure Enclave receipt. Co-signers register firmware and calibration hashes alongside attestation keys, and `verify()` refuses builds and threshold sets it does not recognise. The Pi Zero 2 W has no secure boot; move to a CM4 if your threat model needs one.
 
