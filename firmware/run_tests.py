@@ -453,7 +453,7 @@ def docs_match_the_code() -> bool:
     import calibrate                                       # noqa: E402
     import touch_gate as tg                                # noqa: E402
     from blood_gate import Thresholds                      # noqa: E402
-    import attest, csv                                     # noqa: E402
+    import attest, csv, re                                 # noqa: E402
 
     root = HERE.parent
     readme = (root / "README.md").read_text()
@@ -471,6 +471,19 @@ def docs_match_the_code() -> bool:
         nonlocal ok
         if needle not in text:
             print(f"    {label}: expected to find {needle!r}")
+            ok = False
+
+    def want_every(label, text, needle, n):
+        """The same needle, where the document spells it more than once.
+
+        `want` passes on one surviving copy, so a number quoted twice can go
+        stale in one place and stay green -- which is how PRINTING.md could
+        have carried two different screw lengths. Pin the count.
+        """
+        nonlocal ok
+        got = text.count(needle)
+        if got != n:
+            print(f"    {label}: {needle!r} appears {got} times, expected {n}")
             ok = False
 
     # This runner's own suite labels, which nothing checked until one of them
@@ -576,6 +589,109 @@ def docs_match_the_code() -> bool:
     if frame.exists():
         want("VALIDATION first-build frame CID", validation,
              _unixfs_cid(frame.read_bytes()))
+
+    # Every gate table in BUILD.md, against the dataclass the device compares
+    # against. These are the numbers a builder reads to understand what the
+    # device will reject, and they are the numbers calibration moves, so they
+    # are exactly the kind that goes stale in prose and nowhere else. T5's
+    # floor was raised from 5 ms to 15 after a synthetic metronome walked
+    # through it (VALIDATION.md); the table kept 5 for as long as nothing read
+    # it. Every row below is spelled the way BUILD.md spells it, because a
+    # check on a different spelling is a check on nothing.
+    b, tt = Thresholds(), tg.TouchThresholds()
+    for label, needle in (
+            ("G1", f"window**, {b.return_min}\u2013{b.return_max} of the white patch"),
+            ("G2", f"NIR/Clear \u2265 {b.nir_scatter_min}"),
+            ("G3", f"(R630\u2212R415)/(R630+R415) \u2265 {b.soret_index_min}"),
+            ("G4", f"SAM cosine \u2265 {b.sam_cos_min}"),
+            ("G5", f"`D(early) \u2265 {b.d_liquid_min:.2f}`, speckle contrast"),
+            ("G6", f"`D(late) \u2264 {b.d_clot_max:.2f}`, drop \u2265 "
+                   f"{b.d_drop_min:.2f}, \u03c1 \u2264 \u2212{-b.monotone_rho_max:.2f}"),
+            ("T0", f"sample rate \u2265 {tt.fs_min:.0f} Hz"),
+            ("T1", f"DC level {tt.dc_min * 100:.0f}\u2013{tt.dc_max * 100:.0f}%"),
+            ("T2", f"Perfusion index {tt.perfusion_min * 100:.1f}\u2013"
+                   f"{tt.perfusion_max * 100:.0f}%"),
+            ("T3", f"frequency {tt.bpm_min:.0f}\u2013{tt.bpm_max:.0f} bpm"),
+            ("T4", f"\u2265{tt.band_snr_min * 100:.0f}% of band power"),
+            ("T5", f"RMSSD {tt.rmssd_min_ms:.0f}\u2013{tt.rmssd_max_ms:.0f} ms"),
+            ("T6", f"ratio-of-ratios {tt.r_ratio_min:.2f}\u2013{tt.r_ratio_max:.2f}"),
+            # Section 3 restates the motion gates in its own words before
+            # section 7 tabulates them. Both spellings are checked, because a
+            # needle that matches either one passes while the other goes stale.
+            ("G5 restated", f"moving freely?** `D(early) \u2265 {b.d_liquid_min:.2f}`"),
+            ("G6 restated", f"Did it stop?** `D(late) \u2264 {b.d_clot_max:.2f}`"),
+            ("G6 trend restated",
+             f"drop `\u2265 {b.d_drop_min:.2f}`, Spearman \u03c1 "
+             f"`\u2264 \u2212{-b.monotone_rho_max:.2f}`"),
+            ("capture length", f"**{b.duration_s:.0f} s** window"),
+            ("early window", f"first {b.early_window_s:.0f} s"),
+    ):
+        want(f"BUILD {label} threshold", build, needle)
+
+    # The itemised kit tables, not only the totals under them. The total-string
+    # checks above pass on a table whose own rows add up to something else,
+    # which is how the wallet kit came to list $35.30 of parts under a $34.70
+    # heading. Sum the rows instead.
+    def table_total(section: str, stop: str) -> float:
+        body = build[build.index(section):]
+        body = body[:body.index(stop)]
+        total = 0.0
+        for line in body.splitlines():
+            cells = [c.strip() for c in line.split("|")]
+            for c in cells[2:]:
+                if re.fullmatch(r"\d+(?:\.\d+)?", c):
+                    total += float(c)
+                    break
+        return round(total, 2)
+
+    for label, section, stop, subtotal in (
+            ("reader kit", "### Kit 1.", "Plus the reader consumables", kits["Reader"]),
+            ("wallet kit", "### Kit 2,", "The signing firmware", kits["Wallet"]),
+            ("section 6 parts", "## 6. Parts", "**Consumables:**", hw)):
+        got = table_total(section, stop)
+        if abs(got - subtotal) > 0.005:
+            print(f"    BUILD's {label} table adds up to ${got:.2f}, but the "
+                  f"BOM says ${subtotal:.2f}")
+            ok = False
+
+    # How many parts come out of gen_printables. README quoted ten while the
+    # generator wrote eleven, because the count lives in a directory listing
+    # and no sentence can notice one more file appearing beside it.
+    n_print = len(list((root / "models" / "print").glob("*.stl")))
+    word = {9: "Nine", 10: "Ten", 11: "Eleven", 12: "Twelve",
+            13: "Thirteen"}.get(n_print, str(n_print))
+    want("README printable count", readme, f"{word.lower()} printable STLs")
+    want("README printed parts", readme, f"{word} parts are printed")
+    want("PRINTING printed parts", (root / "PRINTING.md").read_text(),
+         f"{word} parts.")
+
+    # The screw that holds the case shut. It enters from the base and has to
+    # cross the part line to reach an insert in the upper shell, so its length
+    # is derived geometry rather than a preference -- and BUILD.md carried
+    # M2.5x8, which stops 1 mm short of the part line and never enters the
+    # insert at all. check_fit() proves the length; these are the documents a
+    # builder actually orders from.
+    sys.path.insert(0, str(root / "tools"))
+    import gen_enclosure as enc                             # noqa: E402
+    n_screw = f"{enc.SCREW_LEN:.0f}"
+    want("BUILD screw length", build, f"M2.5\u00d7{n_screw}")
+    want_every("PRINTING screw length", (root / "PRINTING.md").read_text(),
+               f"M2.5 \u00d7 {n_screw}", 2)
+    want("BOM screw length", (root / "BOM.csv").read_text(), f"M2.5x{n_screw}")
+
+    # The switch bodies the deck is drilled for, against the ones the BOM
+    # buys. gen_enclosure.check_fit() proves BUTTON_BODY fits the pitch; this
+    # proves somebody ordering from BOM.csv ends up holding those parts. The
+    # BOM used to buy four 12 mm switches for a deck whose three navigation
+    # positions are 11 mm apart, where they foul each other and no cap of
+    # theirs passes the 6.3 mm hole.
+    bom = (root / "BOM.csv").read_text()
+    for cap, body in sorted(enc.BUTTON_BODY.items()):
+        n = sum(1 for _, d in enc.BUTTONS if d == cap)
+        if f"{body:.0f}mm tactile" not in bom:
+            print(f"    the deck has {n} button(s) needing a {body:.0f} mm "
+                  f"switch body (\u00d8{cap} cap), and BOM.csv does not buy one")
+            ok = False
 
     if not _docs_references_resolve(root):
         ok = False
