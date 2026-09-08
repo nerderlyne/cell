@@ -8,6 +8,8 @@ Everything you need to build one is in this repo.
 blood](https://x.com/austingriffith/status/2097231722094191031) — video,
 September 2026. The bounty is still open, and everything below still stands.
 
+<a href="https://x.com/austingriffith/status/2097231722094191031"><img src="diagrams/first-build.png" alt="The blood gate running on the first prototype" width="300"></a>
+
 **[Bounty 24 on poidh](https://poidh.xyz/mainnet/bounty/24)**, on mainnet. It
 is topped up over time, so the listing carries the amount and this file
 deliberately does not.

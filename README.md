@@ -20,6 +20,10 @@ Orbit it, and export OBJ or glTF straight from the viewer. `diagrams/turntable.m
 
 **[Austin Griffith built a prototype and signed a transaction with fresh blood.](https://x.com/austingriffith/status/2097231722094191031)** Video, September 2026.
 
+<a href="https://x.com/austingriffith/status/2097231722094191031"><img src="diagrams/first-build.png" alt="The blood gate running on the first prototype: laser warm-up, then gates G1 to G4" width="360"></a>
+
+<sup>A frame from the video: the blood gate mid-run on the prototype's display. The four gates on screen are this design's chemistry sequence in the builder's own wording — G1 return signal, G2 cellular scatter, G3 Soret, G4 shape.</sup>
+
 The first one outside this repository: assembled hardware, a sample in the chamber, and a signature that happened because the blood gate passed. No captures from that build have been contributed here, so every row in `VALIDATION.md` stands where it was, and the rows waiting on hardware still want the panel numbers behind them.
 
 ## Status

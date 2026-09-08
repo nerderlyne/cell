@@ -17,6 +17,12 @@ September 2026. No captures, thresholds or panel runs from that build have
 been contributed here, so no row below moves on it: a video shows that it
 worked once, not what it measured.
 
+The frame in `README.md` does show the chemistry sequence running in order on
+real optics: laser warm-up, then G1 to G4 pending. Those are
+`blood_gate.py`'s first four gates, relabelled for the display by whoever
+built it. The frame is `diagrams/first-build.png`, IPFS
+`bafybeihrnbc5sivwzuhjsej6aa6tasufcdygtw5aoh5dgql3zsbzm6ruqi`.
+
 ---
 
 ## Verified in CI, every commit
