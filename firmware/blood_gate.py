@@ -637,6 +637,18 @@ def acquire(head: SensorHead, th: Thresholds = Thresholds(),
     early read buys nothing: the sample still sits in the chamber for the full
     duration before anyone looks at the numbers.
 
+    G5 gets the same treatment one window later. It reads only the frames
+    inside early_window_s, so the moment that window closes its verdict is
+    final and the remaining nine minutes cannot change it. Everything that was
+    never liquid -- corn syrup, a gel, already-clotted blood, and the sealed
+    REFERENCE cartridge the pre-flight in BUILD.md section 5 runs before every
+    signing session -- lands there. Without this the pre-flight is a ten-minute
+    wait for a verdict that was settled at sixty seconds.
+
+    G6 is deliberately NOT abortable. Its whole question is whether the sample
+    arrested by the end, and there is no earlier moment at which the answer is
+    known.
+
     Pass early_abort=False when recording calibration data, where the full
     speckle series is wanted even for samples that fail on chemistry.
     """
@@ -667,6 +679,21 @@ def acquire(head: SensorHead, th: Thresholds = Thresholds(),
             D, K = speckle_metrics(head.read_speckle_burst(), th)
             speckle.append((now, D, K))
             next_sp = now + th.speckle_period_s
+            if early_abort and now >= th.early_window_s:
+                # Evaluated on the same mask G5 uses at the end of a full run,
+                # so aborting here and running on cannot disagree.
+                #
+                # Except on a NaN, which speckle_metrics reports for a run of
+                # bit-identical frames. That is a stalled camera, and G6 is
+                # the gate that says so by name. Leaving early on it would
+                # hand the owner G5's sentence instead, sending them to look
+                # at their blood when the fault is the CSI cable.
+                sp = np.array(speckle, dtype=float)
+                if (np.all(np.isfinite(sp[:, 1:]))
+                        and not gate5_free_motion(sp[:, 0], sp[:, 1], sp[:, 2],
+                                                  th).passed):
+                    aborted_at = now
+                    break
         time.sleep(0.05)
 
     if chem is None:
@@ -684,8 +711,18 @@ def evaluate(capture: dict, th: Thresholds = Thresholds()) -> LivenessResult:
     t = np.array([r[0] for r in sp])
     D = np.array([r[1] for r in sp])
     K = np.array([r[2] for r in sp])
-    gates.append(gate5_free_motion(t, D, K, th))
-    gates.append(gate6_motion_arrested(t, D, th))
+    g5 = gate5_free_motion(t, D, K, th)
+    gates.append(g5)
+    g6 = gate6_motion_arrested(t, D, th)
+    stopped = capture.get("aborted_at_s")
+    if stopped is not None and not g5.passed:
+        # Otherwise this reads "Capture too short", which sounds like a fault
+        # in the run rather than the deliberate consequence of G5 failing.
+        g6 = GateResult(g6.name, False, g6.value, g6.threshold,
+                        "Not reached — the capture stopped at %.0f s because "
+                        "G5 had already failed, and G5 reads only the first "
+                        "%.0f s." % (stopped, th.early_window_s))
+    gates.append(g6)
 
     accepted = all(g.passed for g in gates)
 

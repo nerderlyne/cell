@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Two properties the gate must hold that no other suite covers.
+"""Three properties the gate must hold that no other suite covers.
 
 1. ENROLMENT PRESERVES THE CLAMP MASK. gate4 restricts its comparison to the
    channels not pinned at the absorbance clamp, and derives that mask from
@@ -16,6 +16,12 @@
    gives the owner a stack trace where a rejection would have named the gate.
    A sensor returning zeros, NaNs or a single frame is a loose connector, not
    an attack, and the device has to say so.
+
+3. STOPPING EARLY DOES NOT CHANGE THE ANSWER. acquire() abandons a capture as
+   soon as chemistry fails, and again as soon as G5's window has closed on a
+   sample that never moved. Both are pure latency wins only if the verdict is
+   identical to the one a full ten-minute run would have reached, so the whole
+   panel is run both ways and compared gate by gate.
 """
 
 from __future__ import annotations
@@ -216,6 +222,77 @@ def every_threshold_is_accounted_for() -> bool:
     return ok
 
 
+def aborting_early_never_changes_a_verdict() -> bool:
+    """acquire() may stop early, but only where the answer is already fixed.
+
+    Two gates are decided before the ten minutes are up. Chemistry is read at
+    chemistry_at_s, and G5 reads only the frames inside early_window_s -- so
+    once that window closes, nothing later in the run can move it. Both are
+    cut short, which is what keeps the BUILD.md section 5 pre-flight to a
+    minute instead of ten for a REFERENCE cartridge that cannot clot.
+
+    The risk is not the waiting, it is that an abort and a full run disagree:
+    a sample accepted at ten minutes and rejected at one would be a gate that
+    depends on how long anyone happened to watch. So the whole spoof panel is
+    run both ways and the verdicts, gate by gate, have to match.
+
+    G6 is excluded from the abort on purpose. Its question is whether the
+    sample arrested by the END, and there is no earlier moment that answers it.
+    """
+    th = bg.Thresholds()
+    # The clock is compressed 100x. The shape is what matters -- chemistry
+    # inside the first window, a speckle series either side of early_window_s.
+    fast = replace(th, duration_s=2.0, chemistry_at_s=0.02,
+                   speckle_period_s=0.05, early_window_s=0.4, late_window_s=0.8)
+
+    ok = True
+    stopped_early = {}
+    for label in sorted(cal.PANEL):
+        full = bg.evaluate(
+            bg.acquire(cal.SyntheticHead(label, 0), fast, early_abort=False),
+            fast)
+        cut = bg.acquire(cal.SyntheticHead(label, 0), fast, early_abort=True)
+        short = bg.evaluate(cut, fast)
+        if cut["aborted_at_s"] is not None:
+            stopped_early[label] = cut["aborted_at_s"]
+        # G6 is the one gate an abort legitimately leaves unmeasured, and it
+        # is compared as a verdict rather than a value for that reason.
+        same = (full.accepted == short.accepted
+                and [g.passed for g in full.gates] == [g.passed for g in short.gates])
+        ok &= check(f"{label}: same verdict cut short as run out", same)
+        if not same:
+            print(f"      full={[g.passed for g in full.gates]}")
+            print(f"      cut ={[g.passed for g in short.gates]}")
+
+    # A check that never fires proves nothing. The panel must contain samples
+    # that actually take the G5 exit, not only the chemistry one.
+    late = [l for l, at in stopped_early.items() if at >= fast.early_window_s]
+    ok &= check("some class exits at G5, not only at chemistry", bool(late))
+    ok &= check("the REFERENCE cartridge is one of them", "reference" in late)
+    if late:
+        print(f"      G5 exit: {sorted(late)}")
+
+    # A stalled camera returns bit-identical frames, which speckle_metrics
+    # reports as NaN. G5 reads that as "did not move" and would leave at the
+    # early window carrying its sentence -- which sends the owner to look at
+    # their blood when the fault is the CSI cable. G6 is the gate that names
+    # a stall, so the abort has to stay out of its way.
+    class StalledCamera(cal.SyntheticHead):
+        def read_speckle_burst(self):
+            burst = super().read_speckle_burst()
+            return np.repeat(burst[:1], len(burst), axis=0)
+
+    stall = bg.acquire(StalledCamera("genuine", 0), fast)
+    ok &= check("a stalled camera is not cut short at G5",
+                stall["aborted_at_s"] is None)
+    g6 = [g for g in bg.evaluate(stall, fast).gates if g.name.startswith("G6")][0]
+    ok &= check("and G6 names the sensor rather than the sample",
+                not g6.passed and "sensor" in g6.detail)
+    if g6.passed or "sensor" not in g6.detail:
+        print(f"      {g6}")
+    return ok
+
+
 def run() -> int:
     print("Gate robustness — enrolment invariant, hostile captures.\n")
     print(" Enrolment")
@@ -226,6 +303,8 @@ def run() -> int:
     ok &= every_threshold_is_accounted_for()
     print("\n Cartridge stops")
     ok &= acquire_visits_both_cartridge_stops()
+    print("\n Early abort")
+    ok &= aborting_early_never_changes_a_verdict()
     print("\n" + "-" * 60)
     print("PASS" if ok else "FAIL")
     return 0 if ok else 1
