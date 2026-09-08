@@ -1,6 +1,6 @@
 # CELL Build Specification
 
-Single device, $96.95 in hardware plus $31.00 of consumables, Raspberry Pi Zero 2 W, 3D-printed shell over the Pi.
+Single device, $97.45 in hardware plus $31.00 of consumables, Raspberry Pi Zero 2 W, 3D-printed shell over the Pi.
 
 The enclosure comes from `viewer/model.js`, a parametric three.js model. `models/instrument.obj` is its export, 104 named objects with materials, 116.2 × 73.2 × 28.3 mm, and `diagrams/mechanical.svg` is generated from that by `tools/gen_mechanical.py`, so the drawing cannot drift from the model. See §10.
 
@@ -44,13 +44,13 @@ The blood reader is the novel component. The wallet layer is a solved problem th
 
 | Kit | What it is | Cost |
 |---|---|---|
-| `Reader` | The blood reader hardware, Pi, spectrometer, laser, camera, LEDs, filament | $62.25 |
+| `Reader` | The blood reader hardware, Pi, spectrometer, laser, camera, LEDs, filament | $62.75 |
 | `Reader consumable` | Lancets, alcohol pads, PET window film, tape, sharps container. Needed to run the reader at all. About 100 blood readings, limited by the lancet and pad counts | $31.00 |
 | `Wallet` | The signing half, secure element, display, buttons, QR camera, ring window, fasteners | $34.70 |
 
 Order the reader kit and its consumables together; they are one purchase and the reader is useless without both. The wallet kit is a second purchase you only make if the reader works.
 
-### Kit 1. The blood reader ($62.25 hardware + $31.00 consumables, one weekend)
+### Kit 1. The blood reader ($62.75 hardware + $31.00 consumables, one weekend)
 
 | Item | ~USD |
 |---|---|
@@ -60,7 +60,7 @@ Order the reader kit and its consumables together; they are one purchase and the
 | 650 nm laser diode module | 2.00 |
 | Pi Camera + mini-CSI cable | 10.00 |
 | 3 × 2N7002 + resistors | 1.45 |
-| Cartridge-present microswitch | 0.50 |
+| Cartridge-present microswitch, DPDT | 1.00 |
 | 16 GB microSD | 6 |
 | Jumper wires, small breadboard | 5 |
 | PETG white + black, ~90 g black + 60 g white | 5.00 |
@@ -79,15 +79,15 @@ It answers the question that determines whether the rest is worth building: does
 | USB webcam, for QR ingest | 8 |
 | micro-USB OTG adapter, for that webcam | 2 |
 | ATECC608B breakout | 6 |
-| 4 × 12 mm tactile buttons | 3 |
+| 3 × 6 mm tactile + 1 × 12 mm tactile (CONFIRM) | 3 |
 | USB-C breakout, power only | 2 |
-| M2.5 screws + heat-set inserts, M2 display screws | 2.80 |
+| M2.5 screws + heat-set inserts, M2 display screws | 2.20 |
 | Ø6 mm ground-glass diffuser + 5-minute epoxy | 2.50 |
 | Ø10 × 0.5 mm ring window, clear acrylic or glass | 1.00 |
 
 The signing firmware is in this repository, see §12. Build it, provision a seed, then do the airgap hardening: radios disabled, antenna trace cut, read-only rootfs.
 
-**Full device: $96.95 of hardware,** plus $31.00 of consumables. $127.95 all in.
+**Full device: $97.45 of hardware,** plus $31.00 of consumables. $128.45 all in.
 
 **What a signature costs.** A touch-tier signature costs nothing, no
 cartridge, no lancet, and touch is the everyday default. A blood-tier
@@ -149,7 +149,7 @@ This restates the security argument in measurable terms:
 | Action | Fingertip on the ring | A drop in a cartridge |
 | Time | 15 s | 10 min |
 | Consumable | None | Cartridge + lancet |
-| Added parts | **Zero** |, |
+| Added parts | **Zero**, it reuses the spectrometer | The laser and the camera |
 | Defeats | Malware, automation, remote signing | All of that, plus stored samples |
 
 Touch mode is photoplethysmography. Arterial blood volume in the fingertip changes with each heartbeat, so light coming back through the ring bore carries a small pulsatile signal on a large steady one. The white LED gives a red channel, the 940 nm LED gives infrared, the AS7341 samples both at 50 Hz. **The ring bore is the sensor port in both modes**. A finger on it, or a cartridge under it.
@@ -163,7 +163,7 @@ Touch mode is photoplethysmography. Arterial blood volume in the fingertip chang
 | T2 | Pulsatile | Perfusion index 0.3–10% | Static objects, printed photos, and, at the ceiling, motion |
 | T3 | Rate | Dominant frequency 40–180 bpm | Anything not beating like a heart |
 | T4 | Cardiac band | ≥45% of band power at the fundamental | Broadband noise, artefact |
-| T5 | Variability | RMSSD 5–250 ms | **Mechanical pulsators.** A real heart is not a metronome |
+| T5 | Variability | RMSSD 15–250 ms | **Mechanical pulsators.** A real heart is not a metronome |
 | T6 | Haemoglobin ratio | Red/IR ratio-of-ratios 0.40–0.90 | **Dye-based fake fingers** |
 
 T6 is the important one, and it is the same physics the blood mode uses at 415 nm applied to a living finger. A silicone finger with red dye pumped through it can produce a convincing pulse, but dye does not have haemoglobin's red-to-infrared absorption ratio. It also catches motion from the other side: a geometry change hits both wavelengths equally and drives the ratio toward 1.0, while real perfusion sits near 0.6.
@@ -196,7 +196,7 @@ Everything else is yours to set: an amount threshold, specific operation classes
 
 | | Scope | Persists? | Costs blood to change |
 |---|---|---|---|
-| **Escalation** | This one operation | No. The next one reverts to the floor |, |
+| **Escalation** | This one operation | No. The next one reverts to the floor | Nothing to change |
 | **The floor** | A standing rule | Yes, until changed | **Yes, in either direction** |
 
 Choosing blood for a single transfer changes nothing permanently; you paid more for one signature. Changing the floor is a different act, and it is blood-locked **both ways**.
@@ -251,7 +251,7 @@ This is the same assumption as a TPM quote or a Secure Enclave receipt. It is a 
 
 ### Limits of the touch tier
 
-Prove *whose* finger. Neither does blood. That is the PIN's job. And a well-made artificial finger containing a genuine haemoglobin-like absorber, driven by a pump replaying recorded variability, would pass. That is a lab effort, not a lunch-break one, and it is beyond any remote attacker.
+Touch cannot prove *whose* finger it is. Neither can blood. That is the PIN's job. And a well-made artificial finger containing a genuine haemoglobin-like absorber, driven by a pump replaying recorded variability, would pass. That is a lab effort, not a lunch-break one, and it is beyond any remote attacker.
 
 ### Hardware note
 
@@ -416,13 +416,13 @@ The reference cartridge is a **drift check, not a blood simulant.** It verifies 
 Before any signing that matters:
 
 ```
-1. Insert NULL       → must reject at Gate 1 (too bright)  ~40 s
+1. Insert NULL       → must reject at Gate 1 (too bright)   ~40 s
 2. Insert REFERENCE  → spectral gates within tolerance,
-                       coagulation gate rejects     ~4 min
+                       G5 rejects it: it cannot move         ~90 s
 3. Proceed
 ```
 
-Five minutes. That fits the ritual this device already is, and it's the check a role-based signer should have and a trading wallet never would.
+Under three minutes for the pair, because neither cartridge runs the full ten. NULL fails on chemistry and stops at t = 5 s. REFERENCE passes chemistry and then simply sits there, so what stops it is G5, at the close of the 60 s early window; §7 has both aborts. That fits the ritual this device already is, and it's the check a role-based signer should have and a trading wallet never would.
 
 ### Write the PIN down
 
@@ -432,7 +432,7 @@ For a device used twice a year, forgetting the PIN is a more likely loss event t
 
 ---
 
-## 6. Parts (~US$97 complete, ~US$62 for the reader alone)
+## 6. Parts (~US$97 complete, ~US$63 for the reader alone)
 
 | Item | Part | ~USD | Notes |
 |---|---|---|---|
@@ -444,15 +444,17 @@ For a device used twice a year, forgetting the PIN is a more likely loss event t
 | Display | ST7789 1.3" 240×240 SPI | 8 | Wallet kit |
 | Camera (QR) | Cheap USB webcam | 8 | Wallet kit. **Not a second CSI camera**. The Pi Zero has one CSI port and the speckle path has it. QR decoding tolerates auto-exposure |
 | USB OTG adapter | micro-USB male → USB-A female | 2 | Wallet kit. The Zero's ports are micro-USB. Without this the webcam does not physically connect |
-| Buttons | 12 mm tactile ×4 | 3 | Wallet kit. One is CONFIRM, on its own pin |
-| LEDs | 5 mm white ×2, 940 nm IR ×1, 2N7002 ×3, resistors | 3 | One MOSFET each for LED #2, the IR LED and the laser, see §11 for the rails |
-| Cartridge switch | SPDT snap-action microswitch, lever | 0.50 | Reader kit. GPIO22, and the laser interlock (§9) |
+| Buttons | 6 mm tactile ×3 + 12 mm tactile ×1 | 3 | Wallet kit. The 12 mm one is CONFIRM, on its own pin. The deck is drilled Ø6.3 on an 11 mm pitch for the three and Ø9.1 for CONFIRM, so a 12 mm body will not fit the other three positions |
+| LEDs | 5 mm white ×2, 940 nm IR ×1, 2N7002 ×3, resistors | 2.75 | One MOSFET each for LED #2, the IR LED and the laser, see §11 for the rails |
+| Cartridge switch | **DPDT** snap-action microswitch, lever | 1.00 | Reader kit. Two poles: GPIO22 on one, the laser supply on the other (§9). One pole cannot do both |
 | Power | USB-C breakout, power only | 2 | **No battery**, see §2. Desolder D+/D− or use a data blocker. **Confirm it carries 5.1 kΩ CC pulldowns**, see §11 |
 | Storage | 16 GB A2 microSD | 6 | |
+| Prototyping | Small breadboard + jumper wires | 5 | Reader kit. No PCB is needed to prove the sensing |
 | Test cartridges | Printed once, sealed, kept with the device | 0 | Wallet kit. REFERENCE + NULL, see §5 |
 | Filament | PETG black ~90 g, white ~60 g | 5 | Not PLA |
-| Fasteners | M2.5×8 + heat-set inserts ×6 | 3 | |
+| Fasteners | M2.5×16 + heat-set inserts ×6 | 2.20 | Includes the four M2 self-tappers for the display. **Not a shorter screw:** it enters from the base and has to cross the part line at 11.4 to reach an insert seated 6 mm into the upper shell |
 | Ring window | Ø10 × 0.5 mm clear acrylic or glass disc | 1 | Seals the chamber, contact surface for touch mode |
+| Chamber diffuser | Ø6 mm ground glass, 220 grit or finer, + opaque black 5-minute epoxy | 2.50 | Wallet kit. The tamper boundary, see §9. Skip it and the device still signs; the case just stops being part of the key |
 
 **Consumables:** contact-activated sterile lancets 28G/1.8 mm (~$0.06 ea, any pharmacy), alcohol prep pads, 0.1 mm PET film for cartridge windows (transparency or laminating pouch, ~$8/100 sheets ≈ 1,600 windows), a 1 L sharps container. No reagents. Nothing here has a shelf life.
 
@@ -521,7 +523,13 @@ Most of the current bill is the cost of breakout boards rather than the silicon 
 | 5 | **Free motion** ⭐ | `D(early) ≥ 0.60`, speckle contrast valid | Already-clotted blood, syrups, gels, anything that was never liquid |
 | 6 | **Motion arrested** ⭐ | `D(late) ≤ 0.25`, drop ≥ 0.35, ρ ≤ −0.70 | **Anticoagulated blood.** This is the anti-replay gate |
 
-Gates 1–4 are evaluated at t = 5 s **and the capture aborts there if any of them fail**, so an obvious spoof is rejected in seconds rather than ten minutes. Gates 5–6 need the full run. `calibrate.py` disables the abort, because calibration wants the whole speckle series even for samples that fail on chemistry.
+Gates 1–4 are evaluated at t = 5 s **and the capture aborts there if any of them fail**, so an obvious spoof is rejected in seconds instead of ten minutes.
+
+**Gate 5 aborts too, one window later.** It reads only the frames inside the first 60 s, so the moment that window closes its verdict is fixed and the remaining nine minutes cannot move it. Everything that was never liquid leaves there: corn syrup, gels, already-clotted blood, and the sealed REFERENCE cartridge the pre-flight in §5 runs before every signing session.
+
+**Gate 6 is the one that needs the whole run,** and it is deliberately not abortable. Its question is whether the sample arrested by the end, and no earlier moment answers it.
+
+An abort is a latency win only if it cannot change an answer, so `test_gate_robustness.py` runs all 18 spoof classes both ways and requires the two verdicts to match gate by gate. `calibrate.py` disables both aborts, because calibration wants the whole speckle series even for samples that fail on chemistry.
 
 ### Gate 1 is a window, not a floor
 
@@ -639,7 +647,7 @@ A second, independent optical path in the same chamber.
 | Item | Spec | Why |
 |---|---|---|
 | Source | 650 nm diode module, ≤5 mW | Coherent light is mandatory. An LED's coherence length is microns. It produces no speckle |
-| Interlock | Laser energised only when the cartridge switch is closed | The chamber is sealed, but wire the interlock anyway. Put the switch contacts in **series with the laser module's supply**, not in the GPIO6 gate line. An interlock the firmware can talk its way past is not an interlock. GPIO6 then gates a laser that is already dead with the chamber open |
+| Interlock | Laser energised only when the cartridge switch is closed | The chamber is sealed, but wire the interlock anyway. Put a switch pole in **series with the laser module's supply**, not in the GPIO6 gate line. An interlock the firmware can talk its way past is not an interlock. GPIO6 then gates a laser that is already dead with the chamber open. **This is why the switch is DPDT.** The other pole is GPIO22, and the two jobs need two poles, see §11 |
 | Camera | Pi Camera, **lens unscrewed and removed** | Lensless speckle grain ≈ λz/D ≈ 4.3 µm at 20 mm over a 3 mm spot, about 3.1 pixels on the OV5647's 1.4 µm pitch, inside the 3–5 px check below. (On an IMX219's 1.12 µm pitch the same grain is 3.9 px; §6 specifies the OV5647 because its lens unscrews.) With a lens fitted the grain falls to ~1.6 px and is undersampled |
 | Standoff | ~20 mm, off the specular axis | |
 | Settings | **Fixed** exposure ≤2 ms, fixed gain, AWB off, denoise off | Any auto-adjustment between frames destroys the correlation measurement. This is the single most common way to get garbage out of this sensor |
@@ -744,7 +752,7 @@ Edit the model, re-export, re-run the generator. CI fails if the drawing and the
 | Ring | Ø14.4 OD / Ø9.8 ID, 1.5 proud | Oxblood, smooth bezel. **A marker for the measurement spot, not a control, nothing rotates** |
 | Index ticks | 60 @ R21.2, every 5th in steel | Around the dish |
 | Display | 49.7 × 37.7 | Flush glass, oxblood bezel |
-| Buttons | 3 × Ø5.8 + 1 × Ø8.6 | The Ø8.6 is CONFIRM, with its own collar |
+| Buttons | 3 × Ø5.8 + 1 × Ø8.6 | The Ø8.6 is CONFIRM, with its own collar. The three navigation holes are on an 11 mm pitch, which takes a 6 mm switch body; CONFIRM has 17 mm to itself and takes the 12 mm one |
 | Pad | 24.0 × 12.0 | Printed marking. **Reserved, see below** |
 | Sample slot | 34.0 × 3.0, 4.2 deep | Front face |
 | Compute bay | 72 × 16, 3.2 deep | Rear face |
@@ -760,7 +768,7 @@ Edit the model, re-export, re-run the generator. CI fails if the drawing and the
 
 **3. The dish is a reader, not a dial.** The ring and the 60 index ticks are decorative. Nothing rotates. The cartridge enters through the front slot and sits under the dish, and the ring frames the measurement spot and serves as the contact surface for the touch tier.
 
-**4. The display window is bigger than any 1.3 in module.** 49.7 × 37.7 comes from the viewer model; a 1.3" 240×240 panel has a ~23 mm active area. `models/print/display_bezel.stl` masks the window down to the screen and is the one printed part fitted to a component this specification does not pin down, **measure the module you bought** and set `SCREEN_W`, `SCREEN_H` and `SCREEN_OFFSET_Y` at the top of `tools/gen_printables.py` before printing it. The module hangs below the deck on the four Ø4 posts, M2 self-tappers into their Ø1.8 pilots; the bezel drops into the window from outside, flush with the deck, counterbored over those screw heads.
+**4. The display window is bigger than any 1.3 in module.** 49.7 × 37.7 comes from the viewer model; a 1.3" 240×240 panel has a ~23 mm active area. `models/print/display_bezel.stl` masks the window down to the screen and is the one printed part fitted to a component this specification does not pin down, **measure the module you bought** and set `SCREEN_W`, `SCREEN_H` and `SCREEN_OFFSET_Y` at the top of `tools/gen_printables.py` before printing it. Those three place the aperture. The four posts it screws to are a separate number, on a fixed 25 × 30 mm grid in `DISPLAY_POST` at the top of `tools/gen_enclosure.py`; a board drilled to a different grid needs that moved and both files regenerated. The module hangs below the deck on the four Ø4 posts, M2 self-tappers into their Ø1.8 pilots; the bezel drops into the window from outside, flush with the deck, counterbored over those screw heads.
 
 ### Print settings
 
@@ -814,7 +822,7 @@ do not raise the shared bus and hope.
 | GPIO12 | White LED #2 gate (2N7002 low-side, 68 Ω to **+5 V**) |
 | GPIO6 | Laser gate (2N7002), interlocked to the cartridge switch |
 | GPIO23 | 940 nm IR LED gate (2N7002 low-side, 47 Ω to **+3V3**) |
-| GPIO22 | Cartridge-present microswitch, internal pull-up, LOW when seated |
+| GPIO22 | Cartridge-present microswitch, **pole 1**, internal pull-up, LOW when seated. Pole 2 carries the laser supply |
 | CSI | Camera |
 
 **Two common first-build failures:**
@@ -832,7 +840,15 @@ do not raise the shared bus and hope.
    ~20–30 mA at your Vf, then pick the rail that value implies. The MOSFETs switch
    the low side either way, so 3V3 gate drive is fine for both.
 
-4. **A USB-C breakout with no CC pulldowns delivers nothing.** A compliant source
+4. **The cartridge switch needs two poles, and an SPDT has one.** It is asked
+   to do two things at once: pull GPIO22 down when a cartridge is seated, and
+   carry the laser's supply so an open bay cannot be lit. Both want a contact
+   that closes on seating, and on a single-pole switch that is the same
+   contact. Tie them together and the diode's rail lands on a 3V3 input the
+   moment the bay opens. So: pole 1 to GND and GPIO22, pole 2 in series with
+   the laser module's V+, one lever, one actuation, no shared node.
+
+5. **A USB-C breakout with no CC pulldowns delivers nothing.** A compliant source
    reads the absent 5.1 kΩ on CC1/CC2 as "nothing plugged in" and never turns on.
    Most power-only breakouts fit them; some do not. Measure CC1–GND before you
    conclude the Pi is dead. Budget 5 V at 2 A: the Zero 2 W peaks near 0.5 A, and a

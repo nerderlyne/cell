@@ -10,7 +10,7 @@ and the physics is not confirmed. In rough order of usefulness:
 
 **A panel run is a partial claim on the build bounty. See `BOUNTY.md`.**
 
-The reader kit is $62 of hardware plus $31 of consumables, and it produces the
+The reader kit is $63 of hardware plus $31 of consumables, and it produces the
 number this whole design turns on: how cleanly the gate separates real blood
 from every fake. Every threshold in `firmware/blood_gate.py` is derived from
 published physics. Panel data turns those into measured values with a stated

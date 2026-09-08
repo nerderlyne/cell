@@ -105,10 +105,13 @@ APERTURE_FIT = 0.4         # bore over tube OD: the slip fit the LEDs already us
 # gen_enclosure now instead of being typed here.
 HEAD_CLEAR = 0.8           # per side, head to skirt bore
 HEAD_PITCH = 0.35          # isosurface grid; BORE_MARGIN is set against it
-# 1.8, not the 2.4 the rest of the file uses. The head is a light shield, not
-# a structural part, and the chamber leaves it only 8.22 mm of height: at 2.4
-# the roof starts low enough that the 45 deg LED bores are still tangent to
-# the aperture bore where they cross it. 1.8 is 4 perimeters at 0.45.
+# 2.4, the same wall the rest of the file uses, and it survives here only
+# because of the LED_BEAM rule below. The chamber leaves the head 8.22 mm of
+# height, and boring the roof to each module's own diameter at 2.4 left the
+# 45 deg LED bores tangent to the aperture bore where they cross it. Passing
+# the BEAM through the roof instead of the module shrinks every opening enough
+# that the walls between them stay printable, so the wall did not have to be
+# thinned to 1.8 to buy the clearance. check_head_geometry() is what holds it.
 HEAD_WALL = 2.4
 # What passes through the roof is the BEAM, not the module. At these angles a
 # component 12 to 20 mm from the sample spot sits above an 8.2 mm block, so

@@ -87,8 +87,8 @@ def main() -> int:
                     "Co-sited with LED #1. Gives touch\nmode its infrared channel.", AMBER),
         "GPIO6":   ("650 nm laser, ≤5 mW", "2N7002, interlocked",
                     "COHERENT SOURCE IS MANDATORY.\nAn LED produces no speckle.", RED),
-        "GPIO22":  ("Cartridge microswitch", "pull-up, LOW when seated",
-                    "Gates the laser. Wire the interlock\neven though the chamber is sealed.", STEEL),
+        "GPIO22":  ("Cartridge microswitch, DPDT", "pole 1: pull-up, LOW when seated",
+                    "Pole 2 carries the laser supply.\nTwo jobs, so two poles.", STEEL),
         "CSI":     ("Pi Camera, LENS REMOVED", "mini-CSI ribbon",
                     "Fixed exposure ≤2 ms, fixed gain,\nAWB and denoise off.", RED),
     }

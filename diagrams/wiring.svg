@@ -42,10 +42,10 @@
 <line x1="310" y1="452" x2="400" y2="452" stroke="#9FA3A8" stroke-width="1.4"/>
 <circle cx="310" cy="452" r="2.6" fill="#9FA3A8"/>
 <rect x="400" y="426" width="600" height="45" rx="4" fill="#141312" stroke="#9FA3A8" stroke-width="1"/>
-<text x="414" y="444" font-size="12" fill="#D8D2C8">Cartridge microswitch</text>
-<text x="414" y="460" font-size="9" fill="#6F7178">pull-up, LOW when seated</text>
-<text x="700" y="444" font-size="9" fill="#6F7178">Gates the laser. Wire the interlock</text>
-<text x="700" y="456" font-size="9" fill="#6F7178">even though the chamber is sealed.</text>
+<text x="414" y="444" font-size="12" fill="#D8D2C8">Cartridge microswitch, DPDT</text>
+<text x="414" y="460" font-size="9" fill="#6F7178">pole 1: pull-up, LOW when seated</text>
+<text x="700" y="444" font-size="9" fill="#6F7178">Pole 2 carries the laser supply.</text>
+<text x="700" y="456" font-size="9" fill="#6F7178">Two jobs, so two poles.</text>
 <text x="76" y="514" font-size="10.5" fill="#9FA3A8">CSI</text>
 <line x1="310" y1="510" x2="400" y2="510" stroke="#B23A48" stroke-width="1.4"/>
 <circle cx="310" cy="510" r="2.6" fill="#B23A48"/>

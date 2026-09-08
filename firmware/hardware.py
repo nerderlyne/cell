@@ -40,7 +40,10 @@ from touch_gate import TouchSensor
 PIN_LED2 = 12       # second white LED, 2N7002 + 68R
 PIN_IR = 23         # 940 nm, 2N7002 + 47R
 PIN_LASER = 6       # 650 nm, interlocked to the cartridge switch
-PIN_CARTRIDGE = 22  # microswitch, pull-up, LOW when a cartridge is seated
+PIN_CARTRIDGE = 22  # microswitch pole 1, pull-up, LOW when a cartridge is seated.
+                    # Pole 2 of the same DPDT carries the laser's supply, which is
+                    # the interlock proper -- BUILD.md section 11. This pin only
+                    # reports what that pole is already enforcing.
 
 SPECKLE_ROI = 128   # px, square
 SPECKLE_FRAMES = 16

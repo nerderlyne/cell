@@ -2,7 +2,7 @@
 
 A hardware wallet that requires a live pulse, or a drop of fresh blood, to authorise a transaction.
 
-Airgapped signer for Bitcoin and Ethereum. Raspberry Pi, 3D-printed enclosure, $96.95 of hardware. Public domain.
+Airgapped signer for Bitcoin and Ethereum. Raspberry Pi, 3D-printed enclosure, $97.45 of hardware. Public domain.
 
 <img src="diagrams/turntable.gif" alt="CELL enclosure, 116 x 73 x 28 mm" width="100%">
 
@@ -30,7 +30,7 @@ The first one outside this repository: assembled hardware, a sample in the chamb
 
 The design is complete and the firmware self-tests on every commit: 46 suites covering the signing stack against published test vectors, both liveness gates, the whole device loop, and the documented build sequence driven end to end. Bitcoin Core accepts and mines what it signs.
 
-The sensor head, the panel, the buttons and the gate chip are written but unverified against hardware here, and `VALIDATION.md` lists each one and what closes it. Start with the reader kit: $62 of hardware plus $31 of consumables, and a weekend proves the sensing before you spend anything on the wallet half. **There's a [bounty](https://poidh.xyz/mainnet/bounty/24) for building one and signing with it. `BOUNTY.md` says what a claim looks like, and a reader-only run counts.**
+The sensor head, the panel, the buttons and the gate chip are written but unverified against hardware here, and `VALIDATION.md` lists each one and what closes it. Start with the reader kit: $63 of hardware plus $31 of consumables, and a weekend proves the sensing before you spend anything on the wallet half. **There's a [bounty](https://poidh.xyz/mainnet/bounty/24) for building one and signing with it. `BOUNTY.md` says what a claim looks like, and a reader-only run counts.**
 
 Sensing thresholds ship as physics-derived defaults and are calibrated to your hardware on first build. `calibrate.py` runs the spoof panel for both tiers, sets every threshold from your own samples, and writes a file the device loads. Touch sessions are 15 seconds each, so that half of the calibration is minutes of work. `BUILD.md` §13 is the procedure. `VALIDATION.md` tracks exactly what has been measured.
 
@@ -315,7 +315,7 @@ The `edta` row is the interesting one: anticoagulated tube blood is chemically i
 | `tools/gen_enclosure.py` | The inside of the two shells, and the fit checks |
 | `contracts/` | On-chain verification of the attestation record, and the registry |
 | `models/` | Enclosure mesh, coordinate convention, regeneration |
-| `models/print/` | The ten printable STLs and their generated manifest |
+| `models/print/` | The eleven printable STLs and their generated manifest |
 | `diagrams/` | Explainer, build sheet, dimensioned drawings |
 | `viewer/` | Parametric three.js model. The source `instrument.obj` is exported from |
 | `VALIDATION.md` | Verification status: what is tested, by what method |
@@ -326,11 +326,11 @@ The `edta` row is the interesting one: anticoagulated tube blood is chemically i
 
 <img src="diagrams/build-sheet.svg" alt="Build sheet: parts, optical head, cartridge" width="100%">
 
-`BUILD.md` §2 splits the build into two kits, and every row of `BOM.csv` says which kit it belongs to. The reader kit is $62 of hardware plus $31 of consumables: a Pi, a spectrometer, a laser, a camera, a printed chamber, cartridges, and the lancets and film to run them. It has no security requirements because it signs nothing, and it answers the only question that determines whether the rest is worth building. The wallet kit adds the signing half for a further $34.70.
+`BUILD.md` §2 splits the build into two kits, and every row of `BOM.csv` says which kit it belongs to. The reader kit is $63 of hardware plus $31 of consumables: a Pi, a spectrometer, a laser, a camera, a printed chamber, cartridges, and the lancets and film to run them. It has no security requirements because it signs nothing, and it answers the only question that determines whether the rest is worth building. The wallet kit adds the signing half for a further $34.70.
 
 A touch signature costs nothing to make. A blood signature spends a lancet, an alcohol pad, a PET window and a printed cartridge, about twenty cents, restocked from any pharmacy. Nothing in the device is consumed by either, and nothing on the bill of materials has a shelf life.
 
-Ten parts are printed, all from `python3 tools/gen_printables.py`, all checked before they are written. `PRINTING.md` is the runbook. What to print in what order, what to check off each stage, and the post-processing the device does not work without.
+Eleven parts are printed, all from `python3 tools/gen_printables.py`, all checked before they are written. `PRINTING.md` is the runbook. What to print in what order, what to check off each stage, and the post-processing the device does not work without.
 
 ## Safety
 

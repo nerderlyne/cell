@@ -58,6 +58,16 @@ DISPLAY_W, DISPLAY_H = 49.7, 37.7
 DISPLAY_R = 1.2                      # window corner radius; the bezel matches it
 BUTTON_Y = 23.0
 BUTTONS = [(-44.5, 5.8), (-33.5, 5.8), (-22.5, 5.8), (-5.5, 8.6)]
+# The switch BODY, which no mesh here carries -- the deck holds only the hole
+# its cap comes up through. UP, DOWN and BACK are on an 11.0 mm pitch, and a
+# 12 x 12 mm tactile switch cannot make that: two neighbours overlap by a
+# millimetre, and its cap does not pass a 6.3 mm hole either. BOM.csv buys
+# 6 mm bodies for those three and one 12 mm for CONFIRM, which has 17 mm of
+# deck to itself. check_fit() is what stops the two drifting apart, because
+# this is a collision that is invisible in the STL and obvious on the bench,
+# with the switches already bought.
+BUTTON_BODY = {5.8: 6.0, 8.6: 12.0}      # cap diameter -> switch body, mm
+BUTTON_GAP = 1.0                         # clear air between adjacent bodies
 SLOT_X, SLOT_W, SLOT_H = 28.5, 34.0, 3.0
 SLOT_Z = 14.9                        # slot centre height
 SLOT_DEPTH = 4.2
@@ -661,6 +671,16 @@ def check_fit(lower, upper):
                      ", want %.2f -- %d of 180 samples tight"
                      % (g, x, y, PART_CLEAR, len(tight)))
 
+    # Adjacent switch bodies, which no probe above can see: the mesh carries
+    # the caps' holes and nothing of the parts under them.
+    for (ax, ad), (bx, bd) in zip(BUTTONS, BUTTONS[1:]):
+        need = (BUTTON_BODY[ad] + BUTTON_BODY[bd]) / 2 + BUTTON_GAP
+        if abs(bx - ax) < need:
+            fails.append("buttons at x=%+.1f and x=%+.1f are %.1f mm apart, "
+                         "and their %.0f/%.0f mm bodies need %.1f"
+                         % (ax, bx, abs(bx - ax), BUTTON_BODY[ad],
+                            BUTTON_BODY[bd], need))
+
     # Every front-face fastener pocket must stay blind. Cut on the wrong axis
     # these were Ø4 slots straight through the wall, and one clear path for
     # ambient light into the body is the whole 415 nm gate.
@@ -758,7 +778,7 @@ def generate(verbose=True):
     viewer_env = check_viewer_envelope()
     if verbose:
         print("fit checks pass: cartridge path, blind vents, Pi bay, sensor "
-              "port, part line")
+              "port, part line, switch bodies, screw reach")
         print("envelope %.2f x %.2f x %.2f mm -- matches BUILD.md section 10"
               % tuple(env))
         print("viewer model agrees: %s"

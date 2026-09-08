@@ -58,7 +58,7 @@ And say what you had to change to make it work, if anything.
 
 **Reader only.** Milestone 7, a spoof panel run, `thresholds.json` and
 `captures/` posted. That is the half carrying the novel physics, and the
-cheaper one to reach at $62. Open an issue here with the numbers as well as
+cheaper one to reach at $63. Open an issue here with the numbers as well as
 claiming on poidh: `CONTRIBUTING.md` says what makes a panel run useful to
 everybody else, and the captures are `.npz` so they can be replayed safely.
 
