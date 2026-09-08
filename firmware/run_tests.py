@@ -273,6 +273,52 @@ def _pin_table(build_md: str) -> dict[int, str]:
     return out
 
 
+def _unixfs_cid(data: bytes) -> str:
+    """The CIDv1 kubo gives this file: 256 KiB chunks, raw leaves, sha2-256.
+
+    VALIDATION.md publishes the CID of the first-build frame so a reader can
+    fetch it from IPFS rather than trusting this repository's copy. That is
+    only worth anything while the two agree, and nothing else in the tree can
+    notice if they stop. Recomputed here from the bytes on disk, with no
+    dependency: UnixFS is a protobuf, and the two messages it needs are ten
+    lines each.
+    """
+    import hashlib
+
+    def varint(n: int) -> bytes:
+        out = b""
+        while True:
+            b, n = n & 0x7F, n >> 7
+            out += bytes([b | (0x80 if n else 0)])
+            if not n:
+                return out
+
+    def blob(field: int, v: bytes) -> bytes:
+        return varint(field << 3 | 2) + varint(len(v)) + v
+
+    def num(field: int, v: int) -> bytes:
+        return varint(field << 3) + varint(v)
+
+    def cid(block: bytes, codec: int) -> bytes:
+        return bytes([1, codec, 0x12, 0x20]) + hashlib.sha256(block).digest()
+
+    chunks = [data[i:i + 262144] for i in range(0, len(data), 262144)]
+    # Links (field 2) are serialised before Data (field 1), as go-merkledag
+    # writes them; a link is hash, name and cumulative size.
+    links = b"".join(
+        blob(2, blob(1, cid(c, 0x55)) + blob(2, b"") + num(3, len(c)))
+        for c in chunks)
+    unixfs = num(1, 2) + num(3, len(data))          # Type = File, filesize
+    unixfs += b"".join(num(4, len(c)) for c in chunks)
+    root = cid(links + blob(1, unixfs), 0x70)
+
+    alphabet = "abcdefghijklmnopqrstuvwxyz234567"
+    bits = "".join(f"{b:08b}" for b in root)
+    bits += "0" * (-len(bits) % 5)
+    return "b" + "".join(alphabet[int(bits[i:i + 5], 2)]
+                         for i in range(0, len(bits), 5))
+
+
 def _docs_references_resolve(root) -> bool:
     """Every file, section and command the documentation names must exist.
 
@@ -524,6 +570,12 @@ def docs_match_the_code() -> bool:
     import se_atecc                                          # noqa: E402
     want("BUILD i2c address of the secure element", build,
          f"{se_atecc.I2C_ADDRESS:#04x}".replace("0x", "0x"))
+
+    # The IPFS pointer beside the first-build frame, against the frame itself.
+    frame = root / "diagrams" / "first-build.png"
+    if frame.exists():
+        want("VALIDATION first-build frame CID", validation,
+             _unixfs_cid(frame.read_bytes()))
 
     if not _docs_references_resolve(root):
         ok = False
