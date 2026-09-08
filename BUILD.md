@@ -1338,6 +1338,88 @@ relabel one of the four built in. Names are capped at 24 characters and tickers
 at 8, both printable ASCII only: a name carrying a direction override or a
 zero-width joiner renders as something other than what was registered.
 
+### And names, if your payees have them
+
+A `.wei`, `.gwei` or `.eth` name is a claim held by a contract on Ethereum
+mainnet. The device has no network and can never read it, so a name reaches the
+screen the same way a token symbol does — you resolve it, you check it, you
+register it:
+
+```bash
+export CELL_RPC=https://your-node
+python3 tools/ethnames.py resolve alice.wei --chain 8453
+python3 tools/provision.py name --dir /boot/cell --name alice.wei \
+    --rpc $CELL_RPC --address 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045
+```
+
+Give `--rpc` and `--address` together and they are checked against each other,
+which is the only check here that does not rest on a single source. An RPC that
+lies about where `alice.wei` points redirects every payment you ever make to
+that name, and nothing downstream of this command would catch it. Read the
+address off the name's own page — `wei.domains`, `gwei.domains`,
+`app.ens.domains` — and paste it in as `--address`.
+
+Registered, the name goes *above* the address on every screen that pays it:
+
+```
+SEND ON ETHEREUM
+  amount   0.1 ETH
+  to  alice.wei
+           0xd8dA6BF26964aF9D7eEd9e03E53
+           415D37aA96045
+  max fee  0.001 ETH
+  chain id 1
+  nonce    3
+  MOST     0.101 ETH
+```
+
+The address is still there, still in full, and still what the signature commits
+to. The name is a recognition aid for the second and every later payment to a
+payee you already checked once. It is not the thing being confirmed.
+
+**Three systems, in one order.** WNS (`.wei`), GNS (`.gwei`) and ENS
+(everything else dotted) all hash a name the same way — EIP-137 — and all three
+answer through the same SLIP-44 coin types, so one module reads all three. The
+suffix decides which, longest match first, and `.eth` is reserved to ENS. A
+bare label like `alice` is a name in both WNS and GNS pointing at two different
+people, so it is refused: register the name in full. Where you have registered
+several names for one address, the screen draws WNS first, then GNS, then ENS —
+this project co-developed WNS, so that order is an admitted bias. It changes
+which of your own labels appears and nothing else.
+
+**One name, several chains, and Bitcoin.** A name is an Ethereum mainnet
+record, but the address underneath it need not be an Ethereum one:
+
+| What the name publishes | Coin type | What the device does with it |
+|---|---|---|
+| its default address | 60 | drawn on every EVM chain that has no entry below |
+| a per-chain address | ENSIP-11, `0x80000000 \| chain_id` | drawn on that chain, *instead of* the default |
+| a Bitcoin address | 0 | drawn on Bitcoin spends |
+
+The per-chain row is the one that matters. A name can be an EOA on Ethereum and
+a contract on Base, and the same twenty bytes on two chains can belong to two
+people — so where a name publishes an override, the default address is *wrong*
+there, and the device says so by refusing to draw the name over it. `--chain
+8453` reads those at registration; `--chain-address 8453=0x…` records one you
+read yourself.
+
+The Bitcoin address is a separate record the name publishes, never derived from
+the EVM one. Nothing derives one from the other, and a device that pretended
+otherwise would be inventing an address nobody controls.
+
+**Why registration, and not resolution on the device.** The same reason chains
+and tokens are registered. An attacker who can put "vitalik.eth" above `0xBAD`
+on the confirmation screen does not have to beat a gate: you read a name you
+recognise and press CONFIRM on somebody else's address. So no operation this
+device parses has a field that can carry a name — `firmware/names.py` checks
+that against the parser on every run — and the only names it will draw are the
+ones you registered yourself.
+
+`provision.py show` lists them. `tools/ethnames.py reverse 0x…` goes the other
+way and forward-verifies before it answers: a primary name is a string its own
+subject wrote, so it is resolved back to the address that claimed it before the
+tool will repeat it.
+
 ### Proving it against a node
 
 `tools/regtest_e2e.py` runs the whole thing against Bitcoin Core on a private regtest chain: Core funds an address the firmware derived, the firmware signs a PSBT spending it, and Core finalises, accepts and mines the result. Every script type, taproot and 2-of-3 included.
@@ -1777,7 +1859,7 @@ A sequence of checks, not a schedule, with the parts in front of you this is a w
 | 6 | 600 s time series, both classes | Blood starts decorrelated and arrests; dye never had speckle. Judge on what G5/G6 measure, early D, late D, the drop and its direction, not on a curve fit |
 | 7 | **Spoof panel**, the reader is done | ROC generated, thresholds set, documented. **This is the result the whole design rests on** |
 | 8 | ATECC608B configured, zones locked, PIN counter live | `atecc_config.py verify --behaviour` passes every line BEFORE `lock-data`; `se_atecc.py --probe` answers; ten wrong PINs wipe a device you can afford to wipe |
-| 9 | Firmware installed, `run_tests.py` green on the Pi | 49 suites pass on the device itself, not just your laptop |
+| 9 | Firmware installed, `run_tests.py` green on the Pi | 51 suites pass on the device itself, not just your laptop |
 | 10 | Provisioned, and the backup written down | `provision.py` re-reads its own seed; you have the words on paper |
 | 10a | Chamber enrolled (optional) | `provision.py enroll-chamber`. The seed re-wraps and still reopens. Back up `chamber.npz` beside the words |
 | 11 | Regtest round trip | `tools/regtest_e2e.py`. Core accepts and mines what the device signed |

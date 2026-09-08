@@ -31,7 +31,7 @@ A button press costs nothing, so malware, an automated script and a deliberate h
 
 ## Status
 
-**Firmware: complete.** 49 suites run on every commit, covering the signing stack against the vectors published in the BIPs, RFC 6979 and the EIPs, both liveness gates, the whole device loop, and the documented build sequence driven end to end. Bitcoin Core funds an address this firmware derives, and accepts and mines the spend it signs.
+**Firmware: complete.** 51 suites run on every commit, covering the signing stack against the vectors published in the BIPs, RFC 6979 and the EIPs, both liveness gates, the whole device loop, and the documented build sequence driven end to end. Bitcoin Core funds an address this firmware derives, and accepts and mines the spend it signs.
 
 **Enclosure: complete.** Eleven parts are printed, all generated from the same constants the specification quotes, all mesh-checked and fit-checked before they are written.
 
@@ -57,7 +57,7 @@ The gate logic, the signing stack and the whole device loop run on any machine.
 
 ```bash
 pip install -r firmware/requirements.txt
-python firmware/run_tests.py           # all 49 suites
+python firmware/run_tests.py           # all 51 suites
 ```
 
 Or one piece at a time:
@@ -186,6 +186,7 @@ Both chains sign on secp256k1, so one key and one signing core serve both. The w
 | `psbt.py` / `tx.py` | BIP-174 and BIP-370 parsing, and all three sighash algorithms |
 | `addresses.py` | bech32 and bech32m, every script type, EIP-55 |
 | `eth.py` | RLP and EIP-1559, built on the device from fields it displays |
+| `names.py` | WNS, GNS and ENS names the owner registered — routing, per-chain addresses, and the reverse the screen draws |
 | `eip712.py` | EIP-712 typed data for smart accounts, the timelock the screen states, and the EIP-7702 delegation |
 | `beacon.py` | The beacon digest, and the period the owner reads |
 | `qr.py` | The airgap: `pNofM` frames, and reassembly that refuses substitution |
@@ -200,6 +201,10 @@ The device signs a closed set of operations it can render as readable text, and 
 **Both QR framings, and a browser.** Transfers arrive and leave as either `pNofM` frames (the Specter convention) or UR 2.0 (what Sparrow and the Keystone-compatible coordinators reach for), and the device replies in whichever it was asked in. UR is rateless, so a frame the camera never manages to read is recovered from a mixture of others instead of stalling the transfer — which matters on a $8 webcam. UR also carries EIP-4527, so MetaMask's and Rabby's QR-account flows work: the request arrives as `ur:eth-sign-request` and the answer goes back as `ur:eth-signature`. There the transaction arrives encoded rather than as fields, so the device rebuilds it, re-encodes it, and refuses if the two differ by a byte.
 
 One operation carries calldata, and the way it does is the point. An **ERC-20 transfer** is signed for tokens the owner registered, and the device is never handed those 68 bytes — it is handed a token, a recipient and an amount, and it writes `transfer(address,uint256)` itself. Both addresses go on the screen in full, because an ERC-20 transfer is addressed to the *contract* and carries the *recipient* in its calldata, and one address on a screen is the wrong one. `decimals` comes from the registration and never from the request: it is where the decimal point goes, and a request that could supply it could render a millionth of a token as one whole token. `approve` is not implemented, and neither is any other selector.
+
+**Names, on both chains.** A payee's `.wei`, `.gwei` or `.eth` name can sit above their address on the confirmation screen — WNS first, then GNS, then ENS, since this project co-developed WNS. The device never resolves one: it has no network, and a name that arrived with a transaction would be a label an attacker picked for an address you are about to approve. So names are registered like chains, tokens and quorums are — `tools/ethnames.py` resolves and forward-verifies on the host, you check the address against the name's own page, and `provision.py name` records the pair. The address stays on the screen in full, and it is still what the signature commits to.
+
+All three systems are rooted on Ethereum mainnet and read through the same SLIP-44 coin types, so one name covers more than one chain: its default address is drawn on every EVM chain, a per-chain address (ENSIP-11) overrides it on the chain that published one, and a Bitcoin address (coin type 0) makes the same name a payee on a Bitcoin spend. Where a name publishes an override, the device refuses to draw that name over the default address on that chain — the same twenty bytes on two chains can be two different owners.
 
 One exception earns its place. A smart account's timelock is not in the signed message, so the same signature means "send now" or "send in two days" depending on chain state the device cannot read — the delay is registered out of band and stated on the screen, along with whether every owner signing together can skip it. And `cancelQueued` is the one self-call the device will sign, at touch tier, because a device that can start a delay but not stop one has given its owner a countdown and no button.
 
@@ -254,9 +259,13 @@ Worth reading before you trust it with anything. `BUILD.md` §16 carries the ful
 | `firmware/app.py` | The loop, as a person uses it |
 | `firmware/ur.py` | UR 2.0 framing, against the published vectors |
 | `firmware/link.py` | The optional USB-C wire, and what choosing it costs |
+| `firmware/names.py` | WNS, GNS and ENS names the owner registered, and what the screen may draw |
+| `firmware/names.py` | WNS, GNS and ENS names the owner registered, and what the screen may draw |
 | `firmware/run_tests.py` | Every self-test in one run. What CI runs |
 | `tools/provision.py` | Choose a seed, wrap it, record the watch-only accounts |
 | `tools/companion.py` | The host end of the USB-C variant's wire |
+| `tools/ethnames.py` | Resolves WNS, GNS and ENS on the machine that has a network |
+| `tools/ethnames.py` | Resolves WNS, GNS and ENS on the machine that has a network |
 | `tools/gen_printables.py` | Generates every printable part, checks it, writes the manifest |
 | `tools/gen_enclosure.py` | The inside of the two shells, and the fit checks |
 | `tools/bench.py` | The checks only the built device can answer |

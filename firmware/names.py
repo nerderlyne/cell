@@ -81,7 +81,10 @@ COIN_EVM = 0x8000_0000        # | chain_id, per ENSIP-11
 
 # `  to  ` is six columns of the forty ops.py has, and the address underneath
 # needs the rest. A name longer than this would wrap, and a payee name that
-# wraps is a payee name that can be made to read as another one.
+# wraps is a payee name that can be made to read as another one. Enforced at
+# registration rather than in `normalize`, because it is a fact about this
+# screen and not about names: `namehash` has to be able to hash the 45-character
+# `<address>.addr.reverse` that ENS reverse records live under.
 MAX_NAME = 32
 
 # What a label may contain, after normalisation. Deliberately narrower than
@@ -101,10 +104,6 @@ def normalize(name: str) -> str:
     out = name.strip().lower()
     if not out:
         raise BadName("a name cannot be empty")
-    if len(out) > MAX_NAME:
-        raise BadName(
-            f"{name!r} is longer than {MAX_NAME} characters and would not fit "
-            f"on the line above the address it names")
     labels = out.split(".")
     for label in labels:
         if not label:
@@ -213,6 +212,10 @@ def register_name(name: str, system: str, eth: str | None = None,
     symbol, the thing being repointed is where the money goes.
     """
     norm = normalize(name)
+    if len(norm) > MAX_NAME:
+        raise BadName(
+            f"{name!r} is longer than {MAX_NAME} characters and would not fit "
+            f"on the line above the address it names")
     routed = system_of(norm)
     if system != routed:
         raise BadName(
@@ -372,8 +375,9 @@ def _selftest() -> int:
     check("a bare label is refused", _raises(system_of, "alice"))
     check("a Cyrillic homograph is refused",
           _raises(normalize, "vitalik.еth"))
-    check("a name over the line budget is refused",
-          _raises(normalize, "a" * MAX_NAME + ".wei"))
+    check("a long name hashes but does not register",
+          len(nm_long := "a" * MAX_NAME + ".wei") > MAX_NAME
+          and namehash(nm_long) != bytes(32))
 
     NAMES.clear()
     A = "0x1111111111111111111111111111111111111111"
@@ -419,6 +423,8 @@ def _selftest() -> int:
           _raises(register_name, "far.wei", "wns", eth=A, chains={999: B}))
     check("not a bitcoin address",
           _raises(register_name, "nb.wei", "wns", btc="bc1qnotanaddress"))
+    check("a name too long for the line above the address",
+          _raises(register_name, "a" * MAX_NAME + ".wei", "wns", eth=A))
     register_name("alice.wei", "wns", eth=A, btc=BTC, chains={8453: B})
     check("an identical repeat is a no-op", len(NAMES) == 2)
     check("a silent repointing is refused",
@@ -426,6 +432,22 @@ def _selftest() -> int:
     check("a refused registration is not recorded",
           address_for("alice.wei") == A and "zero.wei" not in NAMES)
     NAMES.clear()
+
+    # The claim this whole module rests on, checked against the parser that
+    # has to enforce it. `ops.parse` refuses a field no operation declares, so
+    # there is no way for a request to carry a name -- and if some later
+    # operation ever grows a `name` field, this fails.
+    print("\nthe rule underneath all of it: a name cannot arrive with a request")
+    import ops
+    payload = {"type": "eth_spend", "amount_wei": 1, "destination": A, "chain_id": 1,
+               "chain_name": "Ethereum", "nonce": 0, "max_fee_wei": 1}
+    check("the request without one renders", bool(ops.parse(payload).render()))
+    try:
+        ops.parse({**payload, "name": "alice.wei"})
+        named = False
+    except ops.UnrenderableOperation:
+        named = True
+    check("the same request carrying a name is refused", named)
 
     print("\n" + ("PASS" if ok else "FAIL"))
     return 0 if ok else 1

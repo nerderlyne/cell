@@ -36,6 +36,7 @@ import bip39
 import duress
 import eip712
 import eth
+import names
 import ops
 import psbt as psbtmod
 import secp256k1 as ec
@@ -203,6 +204,11 @@ class Provisioning:
     # payload because an EIP-712 signature is bound to a verifyingContract,
     # and an attacker who picks that address picks which account is spent from.
     smart_accounts: list["eip712.SmartAccount"] = field(default_factory=list)
+    # Names the owner resolved and registered, applied to names.NAMES at load;
+    # see tools/provision.py name. Recorded rather than accepted from a payload
+    # for the reason in names.py: a name that arrives with a transaction is a
+    # label an attacker picked for an address the owner is about to approve.
+    names: list["names.Name"] = field(default_factory=list)
 
     def account_export(self) -> bytes:
         """This device's watch-only accounts, as a `ur:crypto-account` body.

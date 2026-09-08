@@ -49,6 +49,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+import names
+
 
 class UnrenderableOperation(Exception):
     """Raised when an operation cannot be shown to the owner in full.
@@ -143,6 +145,33 @@ def format_duration(seconds: int) -> str:
     # owner reads as noise; "2d 3h" is one they can act on, and the residue
     # cannot change a decision a delay of days is already dominating.
     return " ".join(parts[:2])
+
+
+def recipient(address: str, chain_id: int | None = None) -> list[str]:
+    """The recipient block: the address in full, under the owner's name for it.
+
+    Every operation that pays somebody renders its destination through here, so
+    there is one answer to "does this screen name the payee" rather than five.
+
+    THE NAME IS ADDED, NEVER SUBSTITUTED. `names.name_for` only ever answers
+    with something the owner registered on this device -- a name that arrived
+    with the request is not consulted and could not be, because no operation
+    has a field to carry one. So the line above the address is the owner's own
+    claim about these bytes, and the bytes are still there to be read.
+
+    `chain_id` is passed because a name can publish a different address per
+    chain, and a name that has disowned this address on THIS chain must not
+    appear over it. None means Bitcoin, or an EVM screen with no chain of its
+    own. See firmware/names.py.
+    """
+    try:
+        named = names.name_for(address, chain_id)
+    except Exception:                                           # noqa: BLE001
+        # The address is what matters and it is about to be drawn either way. A
+        # name book that cannot answer costs a line of decoration, and must
+        # never cost the owner a confirmation screen.
+        named = None
+    return [f"  to  {named}" if named else "  to"] + wrap_full(address, DISPLAY_COLS)
 
 
 def wrap_full(value: str, width: int, indent: str = "           ") -> list[str]:
@@ -283,9 +312,8 @@ class BitcoinSpend:
                 or self.unverified_sats < 0):
             raise UnrenderableOperation("negative amount, fee or change")
         lines = ["SEND BITCOIN",
-                 f"  amount   {format_btc(self.amount_sats)}",
-                 "  to"]
-        lines += wrap_full(self.destination, DISPLAY_COLS)
+                 f"  amount   {format_btc(self.amount_sats)}"]
+        lines += recipient(self.destination)
         lines.append(f"  fee      {format_btc(self.fee_sats)}")
         if self.change_sats:
             lines.append(f"  change   {format_btc(self.change_sats)} -> your wallet")
@@ -381,8 +409,8 @@ class DirectTransfer:
         if self.amount < 0:
             raise UnrenderableOperation("negative amount")
         amt = format_btc(self.amount) if self.chain == "BTC" else format_eth(self.amount)
-        return ([f"TRANSFER ({self.chain})", f"  amount   {amt}", "  to"]
-                + wrap_full(self.recipient_pubkey, DISPLAY_COLS))
+        return ([f"TRANSFER ({self.chain})", f"  amount   {amt}"]
+                + recipient(self.recipient_pubkey))
 
 
 @dataclass(frozen=True)
@@ -439,9 +467,8 @@ class EthereumSpend:
                 f"chain {self.chain_id} has no native-token ticker; an amount "
                 f"with no denomination is not a number the owner can evaluate")
         lines = [f"SEND ON {self.chain_name.upper()}",
-                 f"  amount   {format_eth(self.amount_wei, self.ticker)}",
-                 "  to"]
-        lines += wrap_full(self.destination, DISPLAY_COLS)
+                 f"  amount   {format_eth(self.amount_wei, self.ticker)}"]
+        lines += recipient(self.destination, self.chain_id)
         lines.append(f"  max fee  {format_eth(self.max_fee_wei, self.ticker)}")
         lines.append(f"  chain id {self.chain_id}")
         lines.append(f"  nonce    {self.nonce}")
@@ -544,9 +571,8 @@ class TokenTransfer:
                 "the recipient is the token contract itself; tokens sent "
                 "there are not recoverable")
         lines = [f"SEND {self.symbol} ON {self.chain_name.upper()}",
-                 f"  amount   {format_token(self.amount_units, self.decimals, self.symbol)}",
-                 "  to"]
-        lines += wrap_full(self.destination, DISPLAY_COLS)
+                 f"  amount   {format_token(self.amount_units, self.decimals, self.symbol)}"]
+        lines += recipient(self.destination, self.chain_id)
         lines.append(f"  {self.symbol} contract")
         lines += wrap_full(self.contract, DISPLAY_COLS)
         lines.append(f"  max fee  {format_eth(self.max_fee_wei, self.ticker)}")
@@ -626,9 +652,8 @@ class SmartAccountExecute:
             raise UnrenderableOperation(
                 "refusing a call from the account to itself")
         lines = [f"SEND FROM {self.account_label.upper()}",
-                 f"  amount   {format_eth(self.amount_wei, self.ticker)}",
-                 "  to"]
-        lines += wrap_full(self.destination, DISPLAY_COLS)
+                 f"  amount   {format_eth(self.amount_wei, self.ticker)}"]
+        lines += recipient(self.destination, self.chain_id)
         lines.append("  account")
         lines += wrap_full(self.account_address, DISPLAY_COLS)
         lines.append(f"  chain    {self.chain_name} ({self.chain_id})")

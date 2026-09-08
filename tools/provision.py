@@ -35,6 +35,8 @@ import bip39                                                    # noqa: E402
 import duress                                                   # noqa: E402
 import eip712                                                   # noqa: E402
 import eth                                                      # noqa: E402
+import ethnames                                                 # noqa: E402
+import names                                                    # noqa: E402
 import ops                                                      # noqa: E402
 import seedstore                                                # noqa: E402
 import signer                                                   # noqa: E402
@@ -396,6 +398,14 @@ def _save(out: Path, prov: wallet.Provisioning, network: str) -> None:
         "tokens": [{"chain_id": cid, "address": addr, "symbol": sym,
                     "decimals": dec}
                    for (cid, addr), (sym, dec) in sorted(prov.tokens.items())],
+        # Names the owner resolved and checked, and the addresses under each.
+        # See tools/ethnames.py for where they come from and firmware/names.py
+        # for what the device does with them.
+        "names": [{"name": n.name, "system": n.system, "eth": n.eth,
+                   "btc": n.btc,
+                   "chains": [{"chain_id": c, "address": a}
+                              for c, a in n.chains]}
+                  for n in sorted(prov.names, key=lambda x: x.name)],
         "smart_accounts": [{"label": a.label, "address": a.address,
                             "chain_ids": list(a.chain_ids),
                             "implementation": a.implementation,
@@ -501,6 +511,14 @@ def _load(d: Path) -> wallet.Provisioning:
                            t["decimals"])
         prov.tokens[(t["chain_id"], t["address"].lower())] = (t["symbol"],
                                                               t["decimals"])
+    # Names AFTER chains, for the reason tokens are: a name can publish a
+    # per-chain address, and register_name refuses one on a chain this device
+    # cannot name.
+    for n in data.get("names", []):
+        prov.names.append(names.register_name(
+            n["name"], n["system"], eth=n.get("eth"), btc=n.get("btc"),
+            chains={c["chain_id"]: c["address"]
+                    for c in n.get("chains", [])}))
     return prov
 
 
@@ -640,6 +658,129 @@ def cmd_token(args) -> int:
           f"{args.decimals} decimals,")
     print("every amount you approve for this token will be wrong by a power of")
     print("ten, and nothing downstream can catch it. Check it now.")
+    return 0
+
+
+def cmd_name(args) -> int:
+    """Register a name -- WNS, GNS or ENS -- against the addresses it publishes.
+
+    The device has no network, so it can never look a name up. What it can do
+    is draw a name the owner already resolved over an address the owner
+    already checked, which turns the second and every later payment to that
+    payee into something recognisable rather than forty hex characters read
+    twice. That is the whole of what a name is worth on an airgapped signer,
+    and it is worth quite a lot: the address is still on the screen, still in
+    full, and still what the signature commits to.
+
+    TWO WAYS IN, AND THE SAFE ONE IS BOTH AT ONCE. With `--rpc` this resolves
+    the name itself over JSON-RPC. With `--address` you supply what you read
+    off the name's own page. Give both and they are checked against each other,
+    which is the only check here that does not depend on one source: an RPC
+    that lies about where `alice.wei` points is an RPC that redirects every
+    payment the owner ever makes to that name, and nothing downstream of this
+    command can catch it.
+
+    WHAT THE CHAINS ARE FOR. A name is an Ethereum mainnet record, and its
+    coin-type-60 address is the one this device will draw on every EVM chain it
+    signs for. A name may also publish a DIFFERENT address for a particular
+    chain (ENSIP-11), and where it does, the mainnet address is wrong there.
+    `--chain` reads those, and the device honours them per chain. See
+    firmware/names.py.
+    """
+    d = Path(args.dir)
+    prov = load(d)
+    chain_ids = tuple(int(c) for c in args.chain)
+    eth_addr, btc_addr, chains = args.address, args.btc, {}
+
+    if args.rpc:
+        try:
+            found = ethnames.resolve(args.rpc, args.name, chain_ids)
+        except (names.BadName, ethnames.ResolveError) as e:
+            print(f"Refused: {e}")
+            return 1
+        if not found.found:
+            print(f"Refused: {found.name} publishes no address in "
+                  f"{found.system.upper()}.")
+            return 1
+        if found.collisions:
+            # Two systems, two answers. Which one the owner meant is not
+            # something this can know, and guessing it is how a payment lands
+            # somewhere the owner never looked at.
+            for system, addr in found.collisions.items():
+                print(f"Refused: {system.upper()} also resolves {found.name}, "
+                      f"to {addr}.")
+            print("Two systems claim this name and disagree about the "
+                  "address. Decide\nwhich you meant, then register it with "
+                  "--address and no --rpc.")
+            return 1
+        if eth_addr and found.eth and \
+                eth_addr.lower() != found.eth.lower():
+            print(f"Refused: you expected {eth_addr}\n"
+                  f"     but {args.rpc} resolves {found.name} to "
+                  f"{found.eth}.\nOne of the two is wrong. Nothing was "
+                  f"registered.")
+            return 1
+        eth_addr = found.eth or eth_addr
+        btc_addr = found.btc or btc_addr
+        chains = found.chains
+        try:
+            primary, _ = ethnames.reverse(args.rpc, eth_addr) if eth_addr \
+                else (None, {})
+        except ethnames.ResolveError:
+            primary = None
+        round_trip = ("and that address names it back"
+                      if primary == found.name else
+                      "and that address does NOT name it back")
+    else:
+        if not (eth_addr or btc_addr or args.chain_address):
+            print("Refused: give --rpc to resolve the name, or --address / "
+                  "--btc to register\nwhat you read off its page yourself.")
+            return 1
+        round_trip = "not checked -- no --rpc, so nothing was resolved"
+
+    for pair in args.chain_address:
+        cid, _, addr = pair.partition("=")
+        if not addr:
+            print(f"Refused: --chain-address wants ID=0xADDRESS, got {pair!r}")
+            return 1
+        chains[int(cid)] = addr
+
+    try:
+        record = names.register_name(args.name, names.system_of(args.name),
+                                     eth=eth_addr, btc=btc_addr, chains=chains)
+    except (names.BadName, addresses.BadAddress) as e:
+        print(f"Refused: {e}")
+        return 1
+    prov.names.append(record)
+
+    network = json.loads((d / ACCOUNTS).read_text())["network"]
+    _save(d, prov, network)
+    print(f"Registered {record.name} ({record.system.upper()}), {round_trip}.")
+    if record.eth:
+        print(f"\n  every EVM chain, unless overridden below")
+        print(f"    {record.eth}")
+    for cid, addr in record.chains:
+        print(f"  {eth.CHAINS[cid][0]} ({cid}), published by the name itself")
+        print(f"    {addr}")
+    if record.btc:
+        print(f"  bitcoin")
+        print(f"    {record.btc}")
+    print("\nConfirmation screens paying it will now read:")
+    shown = record.eth or record.btc
+    for line in ops.recipient(shown):
+        print(f"  {line}")
+    drawn = names.name_for(shown)
+    if drawn != record.name:
+        # Two names of the owner's own, over one address. WNS wins, then GNS,
+        # then ENS -- see firmware/names.py. Said out loud here, because the
+        # owner just registered one name and the screen above shows another,
+        # and finding that out from the device is finding it out too late.
+        print(f"\n  You have also registered {drawn} against these bytes, and"
+              f"\n  it is the one the screen draws. Both are yours and both"
+              f"\n  name the same address; the order is in firmware/names.py.")
+    print("\nThe address is still there, in full, and it is still what the")
+    print("signature commits to. The name is your own claim about those bytes")
+    print("and nothing on this device can check it. Read it back now.")
     return 0
 
 
@@ -1081,6 +1222,33 @@ def main() -> int:
                         "explorer; getting it wrong misplaces the decimal "
                         "point on every amount you ever approve")
     p.set_defaults(fn=cmd_token)
+
+    p = sub.add_parser("name",
+                       help="register a WNS, GNS or ENS name for a payee")
+    p.add_argument("--dir", default="/boot/cell")
+    p.add_argument("--name", required=True,
+                   help="in full, with its suffix: alice.wei, alice.gwei, "
+                        "alice.eth. A bare label is a name in two systems "
+                        "and is refused")
+    p.add_argument("--rpc",
+                   help="resolve it over JSON-RPC instead of typing the "
+                        "address. Give --address as well and the two are "
+                        "checked against each other")
+    p.add_argument("--address",
+                   help="the address the name resolves to, EIP-55 "
+                        "checksummed. What the device draws this name over "
+                        "on every EVM chain")
+    p.add_argument("--btc",
+                   help="the Bitcoin address the name publishes (SLIP-44 "
+                        "coin type 0), if it publishes one")
+    p.add_argument("--chain", action="append", default=[], metavar="ID",
+                   help="with --rpc, also read the address this name "
+                        "publishes for this chain (ENSIP-11). Repeatable")
+    p.add_argument("--chain-address", action="append", default=[],
+                   dest="chain_address", metavar="ID=0xADDRESS",
+                   help="a per-chain address you read yourself. Overrides "
+                        "--address on that chain only. Repeatable")
+    p.set_defaults(fn=cmd_name)
 
     p = sub.add_parser("smart-account",
                        help="register a smart account to authorise spends from")

@@ -49,6 +49,7 @@ import buttons as btn
 import camera as cam
 import eth
 import link as lnk
+import names
 import ops
 import psbt as psbtmod
 import qr
@@ -623,6 +624,14 @@ class Device:
             addresses.p2wpkh_script(node.pubkey), self.network)
         body = ["  single-sig, m/.../0/0", ""]
         body += ops.wrap_full(address, ops.DISPLAY_COLS, indent="  ")
+        # The owner's own name for their own address, if they registered one.
+        # A `.wei` or `.eth` name can publish a Bitcoin address too, and an
+        # owner who published theirs wants to see the device agree that this is
+        # the address behind it -- which is a check they can make here, once,
+        # instead of on every payer's screen.
+        mine = names.name_for(address)
+        if mine:
+            body.append(f"  {mine}")
         # Title, blank and the two footer rows come out of the same twenty.
         # display.show REFUSES a screen that does not fit rather than
         # truncating it, which is the right rule and makes an unbounded list
@@ -672,9 +681,11 @@ class Device:
             evm = self.prov.eth_address()
         except WalletError:
             evm = "(no eth account)"
+        named = names.name_for(evm)
         self._screen("THIS DEVICE", [
             f"  fingerprint  {fp}",
-            "  ethereum, same on every chain",
+            "  ethereum, same on every chain"
+            + (f", as {named}" if named else ""),
         ] + ops.wrap_full(evm, ops.DISPLAY_COLS, indent="    ") + [
             "  attestation key",
         ] + ops.wrap_full(attest_pub, ops.DISPLAY_COLS, indent="    ")[:4] + [

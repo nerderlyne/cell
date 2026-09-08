@@ -42,7 +42,7 @@ built it. The frame is `diagrams/first-build.png`, IPFS
 
 ## Verified in CI, every commit
 
-`python firmware/run_tests.py`, 49 suites, no hardware required.
+`python firmware/run_tests.py`, 51 suites, no hardware required.
 
 ### The signing stack
 
@@ -89,7 +89,7 @@ trip against our own implementation proves nothing, so none of these are that.
 | Speckle physics | Ornstein-Uhlenbeck field, exposure-integrated | Reproduces frozen and liquid limits; exposure, frame interval and grain each swept against the G5/G6 thresholds |
 | Drift margins | 7 disturbance axes, bisected | Tightest budget reported and ranked; a finite tolerance on an invariance axis fails the suite |
 | Mechanical drawing | Regenerated from the mesh | Byte-identical, enforced in CI |
-| A fresh clone | `git clone`, install, `run_tests.py` | 49 suites pass; every path and command the docs name resolves; the LFS mesh arrives as a mesh; all four generators reproduce `models/`, `diagrams/` and `viewer/` byte for byte |
+| A fresh clone | `git clone`, install, `run_tests.py` | 51 suites pass; every path and command the docs name resolves; the LFS mesh arrives as a mesh; all four generators reproduce `models/`, `diagrams/` and `viewer/` byte for byte |
 
 ### The two QR framings
 
@@ -147,6 +147,30 @@ The gadget port itself needs hardware — see "Written but unverified".
 | Registering a quorum we are not in | Refused |
 | Registering one that quotes a foreign xpub under our fingerprint | Refused |
 | 4-of-3, or a duplicate label | Refused |
+
+### Names — WNS, GNS and ENS
+
+Resolution happens on the host, in `tools/ethnames.py`. The device holds no
+resolver: it draws names the owner registered, over addresses the owner
+checked, and the address stays on screen in full.
+
+| Case | Result |
+|---|---|
+| EIP-137 namehash | Matches the node constant WNS, GNS and ENS each publish, and the `foo.eth` vector in EIP-137 |
+| The token id the registries compute | Read back from the contract on every resolution and compared to ours; a disagreement refuses rather than resolving the wrong name |
+| Selector derivation | Pinned to the six interface ids ENS and WNS publish — `addr(bytes32)`, `addr(bytes32,uint256)`, `text`, `contenthash`, `resolver`, `name` |
+| Routing | `.wei`→WNS, `.gwei`→GNS, everything else dotted→ENS; longest suffix first, so `.gwei` is never read as `.wei` |
+| `.eth` | Reserved to ENS; no registry may claim it |
+| A bare label | Refused. `alice` is a name in two systems pointing at two people |
+| A homograph | Refused. Names are lowercase ASCII, because a Cyrillic "a" renders as a Latin one at 40 columns |
+| **A name arriving with a transaction** | Impossible, and checked against the parser on every run: no operation declares a field that could carry one |
+| A name on a chain it published an override for | The default address is *not* drawn under that name there. The override is |
+| A Bitcoin address a name publishes | Read from coin type 0 as a scriptPubkey, decoded through the same `script_to_address` the signer uses, checked against the BIP-173 vector |
+| Reverse resolution | Forward-verified — a primary name is resolved back to the address that claimed it before the tool repeats it |
+| Two of the owner's names over one address | WNS, then GNS, then ENS, then alphabetically. Deterministic, and the command that registers the second one says which is drawn |
+| Repointing a registered name | Refused, like relabelling a token |
+| A per-chain address on an unregistered chain | Refused at registration, where a typo is visible, rather than silently never applying |
+| Live, against mainnet | `vitalik.eth`, `zswap.wei` and `alice.gwei` resolve to their published addresses; `vitalik.eth` reverse-resolves and forward-verifies. Not in CI — CI has no network |
 
 ### PSBT version 2 (BIP-370)
 

@@ -47,6 +47,19 @@ SUITES = [
      [sys.executable, "tx.py"]),
     ("ethereum — RLP, EIP-1559 encoding, recovery",
      [sys.executable, "eth.py"]),
+    # Names, which are the one thing on a confirmation screen that a device
+    # with no network cannot check for itself. The rule that makes them safe
+    # is that they never arrive with the transaction, and this holds the
+    # module to it, to EIP-137, and to the per-chain addresses ENSIP-11 lets a
+    # name publish.
+    ("ethereum names — routing, per-chain addresses, and what it refuses",
+     [sys.executable, "names.py"]),
+    # The resolver behind them, which lives on the host because it needs a
+    # network the device does not have. Only its offline half can run here:
+    # the ABI, the coin types, and the selector derivation, pinned to the
+    # interface ids ENS and WNS publish.
+    ("name resolution — the ABI, the coin types, the published selectors",
+     [sys.executable, "../tools/ethnames.py", "selftest"]),
     # The smart-account path: typed data the device builds from what it shows,
     # and the delegation that decides what every later signature means.
     ("EIP-712 and EIP-7702 — typed data, delegation, and what they bind",

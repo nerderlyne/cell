@@ -140,7 +140,7 @@ pip install -r firmware/requirements.txt
 python firmware/run_tests.py
 ```
 
-No hardware needed. 49 suites covering the signing stack, the gates, the tier
+No hardware needed. 51 suites covering the signing stack, the gates, the tier
 policy, the attestation format and the calibration round trip. `VALIDATION.md`
 is the engineering status record.
 
