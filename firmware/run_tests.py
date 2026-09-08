@@ -693,6 +693,31 @@ def docs_match_the_code() -> bool:
                   f"switch body (\u00d8{cap} cap), and BOM.csv does not buy one")
             ok = False
 
+    # The drawings and the deployed page. Everything else that quotes a number
+    # from this repository is checked against its source; these three were not,
+    # because they are SVG and HTML rather than prose, and all three had gone
+    # stale. The build sheet is hand-drawn and told a builder to run the I2C
+    # bus at the one speed BUILD.md says stops the ATECC608B waking.
+    sheet = (root / "diagrams" / "build-sheet.svg").read_text()
+    import gen_printables as gp                             # noqa: E402
+    want("build sheet cartridge length", sheet,
+         f"{gp.CART_L:.0f} \u00d7 {gp.CART_W:.0f} \u00d7 {gp.CART_T}")
+    want("build sheet capture length", sheet, f"{b.duration_s:.0f} s CAPTURE")
+    want("build sheet hardware cost", sheet, f"~US${round(hw)} ")
+    # The bus speed, taken from BUILD.md's own pin-table preamble so the sheet
+    # and the specification cannot disagree about it.
+    bus = re.search(r"Everything on I\u00b2C1 at \*\*(\d+) kHz\*\*", build)
+    if bus is None:
+        print("    BUILD.md no longer states the I2C bus speed in section 11")
+        ok = False
+    else:
+        want("build sheet I2C speed", sheet, f"I\u00b2C1 @ {bus.group(1)} kHz")
+
+    # The link-preview cards on the deployed page. They are the most public
+    # claim about price this project makes, and the one nobody re-derives.
+    bundle = (root / "viewer" / "instrument-standalone.html").read_text()
+    want("deployed page price", bundle, f"about ${round(hw)} in parts")
+
     if not _docs_references_resolve(root):
         ok = False
 

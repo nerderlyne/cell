@@ -11,7 +11,7 @@
 
   <text x="48" y="52" font-size="22" font-weight="200" letter-spacing="9" fill="#D8D2C8">CELL — BUILD SHEET</text>
   <rect x="49" y="63" width="26" height="2" fill="#8E1A26"/>
-  <text x="952" y="52" text-anchor="end" font-size="10.5" letter-spacing="2.4" fill="#6F7178">~US$94 · mm</text>
+  <text x="952" y="52" text-anchor="end" font-size="10.5" letter-spacing="2.4" fill="#6F7178">~US$97 · mm</text>
 
   <!-- ===== OPTICAL HEAD ===== -->
   <text x="48" y="104" font-size="10.5" letter-spacing="3" fill="#6F7178">OPTICAL HEAD — CHEMISTRY (45°/0°) + LIVENESS (SPECKLE)</text>
@@ -90,7 +90,7 @@
   <text x="610" y="434" font-size="10.5" fill="#C9707A">contaminates 630 nm, the LEDs wash out speckle.</text>
 
   <!-- ===== CARTRIDGE ===== -->
-  <text x="48" y="486.0" font-size="10.5" letter-spacing="3" fill="#6F7178">CARTRIDGE — 45 × 14 × 2.4, WHITE PETG, 0.15 LAYERS, IRONING ON  ·  600 s CAPTURE</text>
+  <text x="48" y="486.0" font-size="10.5" letter-spacing="3" fill="#6F7178">CARTRIDGE — 51 × 14 × 2.4, WHITE PETG, 0.15 LAYERS, IRONING ON  ·  600 s CAPTURE</text>
 
   <g transform="translate(48 502.0) scale(5.0)">
     <rect x="0" y="0" width="32" height="14" rx="0.8" fill="#151513" stroke="#4A4A46" stroke-width="0.14"/>
@@ -120,7 +120,7 @@
   <text x="630" y="624.0" font-size="10.5" fill="#8A8B8F">HBV survives on dry surfaces up to 7 days.</text>
 
   <!-- ===== WIRING ===== -->
-  <text x="48" y="678.0" font-size="10.5" letter-spacing="3" fill="#6F7178">WIRING — BCM NUMBERING, I²C1 @ 400 kHz</text>
+  <text x="48" y="678.0" font-size="10.5" letter-spacing="3" fill="#6F7178">WIRING — BCM NUMBERING, I²C1 @ 100 kHz</text>
 
   <g font-size="10.5">
     <rect x="48" y="694.0" width="440" height="158" rx="5" fill="#101010" stroke="#2A2926"/>
@@ -131,7 +131,7 @@
     <text x="66" y="798.0" fill="#D8D2C8" font-weight="600">GPIO25/27/24</text><text x="180" y="798.0" fill="#8A8B8F">display D/C · RESET · backlight</text>
     <text x="66" y="818.0" fill="#C9A227" font-weight="600">GPIO12 / 23</text><text x="180" y="818.0" fill="#8A8B8F">white LED #2 · IR940 (2N7002, 68R / 47R)</text>
     <text x="66" y="838.0" fill="#B23A48" font-weight="600">GPIO6</text><text x="180" y="838.0" fill="#B23A48">650 nm laser — interlocked to the cartridge switch</text>
-    <text x="66" y="858.0" fill="#D8D2C8" font-weight="600">GPIO22 · CSI</text><text x="180" y="858.0" fill="#8A8B8F">cartridge switch · speckle camera</text>
+    <text x="66" y="858.0" fill="#D8D2C8" font-weight="600">GPIO22 · CSI</text><text x="180" y="858.0" fill="#8A8B8F">cartridge switch (DPDT) · speckle camera</text>
   </g>
 
   <rect x="512" y="694.0" width="440" height="158" rx="5" fill="#141010" stroke="#4A1219"/>

@@ -236,6 +236,35 @@ run().catch(async e => { await post('/__done', 'ERROR: ' + (e && e.message || e)
 """
 
 
+# The sources this render is a picture of. Everything else generated from the
+# model is regenerated and diffed by CI; a turntable cannot be, because it
+# needs a browser and three quarters of an hour. So it records what it was
+# rendered from, and firmware/run_tests.py compares that against the tree.
+# Without it the GIF went three commits stale, through a change that moved the
+# accent colour and another that repainted the screen, while every job stayed
+# green and the README kept serving the previous instrument.
+STAMPED = ("viewer/model.js", "viewer/three-d-stage.js")
+
+
+def source_stamp() -> str:
+    import hashlib
+    h = hashlib.sha256()
+    for rel in STAMPED:
+        h.update((ROOT / rel).read_bytes())
+    return h.hexdigest()
+
+
+def write_stamp(finish: str) -> Path:
+    path = ROOT / "diagrams" / "turntable.stamp"
+    path.write_text(
+        "# What diagrams/turntable.gif and .mp4 were rendered from.\n"
+        "# Regenerate both with: python3 tools/render_turntable.py\n"
+        f"sources {' '.join(STAMPED)}\n"
+        f"finish {finish}\n"
+        f"sha256 {source_stamp()}\n")
+    return path
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -433,8 +462,11 @@ def main() -> int:
     shutil.move(str(mp4_tmp), str(mp4))
     shutil.move(str(gif_tmp), str(out))
 
+    stamp = write_stamp(FINISH)
+
     print(f"wrote {out}  ({out.stat().st_size/1e6:.2f} MB)")
     print(f"wrote {mp4}  ({mp4.stat().st_size/1e6:.2f} MB)")
+    print(f"wrote {stamp}")
     return 0
 
 

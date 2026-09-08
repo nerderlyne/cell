@@ -167,6 +167,25 @@ def fetch(url, expected):
     return raw.decode("utf-8")
 
 
+def hardware_total() -> int:
+    """Rounded hardware cost, read from BOM.csv rather than typed here.
+
+    This number goes into the page description and into both link-preview
+    cards, which is the most public claim about price this project makes and
+    the one nobody thinks to re-derive when a part changes. It sat at $95
+    while the BOM said $97.45. Every document that quotes a price is checked
+    against BOM.csv by firmware/run_tests.py; the deployed page was the one
+    surface that was not, so it takes the figure straight from the source.
+    """
+    import csv
+    total = 0.0
+    with (ROOT / "BOM.csv").open() as fh:
+        for row in csv.DictReader(fh):
+            if row["Kit"] in ("Reader", "Wallet"):
+                total += float(row["Ext USD"] or 0)
+    return round(total)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -183,7 +202,7 @@ def main():
     ap.add_argument("--description",
                     default="Airgapped signer for Bitcoin and Ethereum. A live pulse, or a "
                             "drop of blood that has to clot while the device watches. Open "
-                            "source, 3D printable, about $95 in parts.")
+                            f"source, 3D printable, about ${hardware_total()} in parts.")
     ap.add_argument("--url", default="https://cell.wei.is",
                     help="canonical URL of the deployed page")
     ap.add_argument("--image",
