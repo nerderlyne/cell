@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Hostile bytes, at every point they can enter the device.
 
-There is no wifi, no bluetooth and no USB data path, so everything this device
-learns about the world arrives as pixels through a lens. That makes the
-parsers the whole input attack surface, and it means the interesting question
-is not "does a valid PSBT work" -- other suites answer that -- but "what does
-an INVALID one do".
+There is no wifi and no bluetooth, and on the shipped build no USB data path
+either, so everything this device learns about the world arrives as pixels
+through a lens. That makes the parsers the whole input attack surface, and it
+means the interesting question is not "does a valid PSBT work" -- other suites
+answer that -- but "what does an INVALID one do".
 
 The property under test is narrow and checkable: every entry point may refuse,
 and may only refuse in the ways it has declared. A parser that raises
@@ -40,7 +40,9 @@ import bip32
 import eth
 import ops
 import psbt as psbtmod
+import link
 import qr
+import ur
 import secp256k1 as ec
 import seedstore
 import tx as txmod
@@ -85,7 +87,24 @@ def flat_entry_points() -> None:
     rng = random.Random(SEED)
     seeds = [b"", b"psbt\xff", b"psbt\xff\x01\x00", b"{}", b"4", b"[]", b"null",
              b'{"type":"cell-eth-tx"}', bytes(range(256)), b"\x00" * 64,
-             b"\xff" * 64]
+             b"\xff" * 64,
+             # Seeds shaped like the newer entry points, so the mutator starts
+             # from something that gets past the first character check rather
+             # than bouncing off it.
+             b'{"type":"cell-token-tx"}', b"ur:bytes/aeadaolazmjendeoti",
+             b"ur:crypto-psbt/1-9/lpadascfadaxcywenbpljkhdcahkadae",
+             b"cell1 cHNidP8BAHECAAAAAf==", b"cell1 ", b"ur:",
+             ur.encode(b"a payload that is long enough to be split", "bytes",
+                       max_fragment_len=12)[0].encode(),
+             ur.encode_eth_sign_request(bytes(16), bytes.fromhex(
+                 "02f0010984773594008506fc23ac008252089435353535353535353535"
+                 "35353535353535353535880de0b6b3a764000080c0"), 2,
+                 "m/44h/60h/0h/0/0", chain_id=1),
+             eth.EthTransaction(
+                 chain_id=1, nonce=9, max_priority_fee_per_gas=1,
+                 max_fee_per_gas=2, gas_limit=21000,
+                 to="0x3535353535353535353535353535353535353535",
+                 value=1).signing_payload()]
 
     targets = {
         "PSBT.parse": (psbtmod.PSBT.parse,
@@ -100,6 +119,36 @@ def flat_entry_points() -> None:
                                    addresses.BadAddress, UnicodeDecodeError)),
         "qr.Collector.feed": (lambda d: qr.Collector().feed(d.decode("latin-1")),
                               (qr.BadFrame, ValueError)),
+        # The other framing, which has considerably more surface than pNofM:
+        # bytewords, CBOR, a part header, and fountain indexes derived from
+        # attacker-chosen numbers. All of it reachable from the camera.
+        "ur.Collector.feed": (lambda d: ur.Collector().feed(d.decode("latin-1")),
+                              (ur.BadUR, ValueError)),
+        "ur.parse": (lambda d: ur.parse(d.decode("latin-1")),
+                     (ur.BadUR, ValueError)),
+        "ur.cbor_decode": (ur.cbor_decode, (ur.BadUR, ValueError)),
+        "app.parse_token_request": (app.parse_token_request,
+                                    (ValueError, eth.BadEthTransaction,
+                                     addresses.BadAddress, UnicodeDecodeError)),
+        # The USB variant's framing. Off on the shipped build, and fuzzed
+        # anyway: a variant nobody fuzzes is a variant with the soft spots.
+        "link.decode_message": (link.decode_message,
+                                (link.BadMessage, ValueError)),
+        # EIP-4527. A tagged CBOR map from a browser, plus the one place the
+        # device is handed an encoded transaction and has to rebuild it.
+        "ur.decode_eth_sign_request": (ur.decode_eth_sign_request,
+                                       (ur.BadUR, ValueError)),
+        "app.parse_eth_sign_request": (app.parse_eth_sign_request,
+                                       (ValueError, eth.BadEthTransaction,
+                                        addresses.BadAddress, ur.BadUR)),
+        "eth.from_signing_payload": (eth.from_signing_payload,
+                                     (eth.BadEthTransaction,
+                                      addresses.BadAddress, ValueError)),
+        "eth.signature_from_raw": (eth.signature_from_raw,
+                                   (eth.BadEthTransaction, ValueError)),
+        "eth.decode_erc20_transfer": (eth.decode_erc20_transfer,
+                                      (eth.BadEthTransaction,
+                                       addresses.BadAddress, ValueError)),
         # A verifier that raises on a hostile record is a denial of service on
         # the co-signing flow, so this one may not raise either.
         "attest.verify_blob": (lambda d: attest.verify_blob(d, bytes(32),
@@ -364,6 +413,34 @@ def encoder_properties() -> None:
                 qrmod.decode(frames + frames) != payload:
             ok_qr = False
     check("QR frames reassemble shuffled and duplicated", ok_qr)
+
+    # The same property for UR, plus the one pNofM does not have: a fragment
+    # that never arrives is recovered from the mixtures. Random sizes, random
+    # fragment lengths, and a random pure fragment dropped every time.
+    ok_ur = True
+    ok_fountain = True
+    for _ in range(120):
+        payload = bytes(rng.randrange(256)
+                        for _ in range(rng.randrange(1, 900)))
+        frag = rng.randrange(12, 200)
+        pure = ur.encode(payload, "bytes", max_fragment_len=frag)
+        shuffled = list(pure)
+        rng.shuffle(shuffled)
+        if ur.decode(shuffled) != payload or ur.decode(pure + pure) != payload:
+            ok_ur = False
+        if len(pure) < 2:
+            continue
+        # Three passes' worth, so there are mixtures to recover from.
+        loop = ur.encode(payload, "bytes", max_fragment_len=frag,
+                         parts=len(pure) * 3)
+        dropped = loop[rng.randrange(len(pure))]
+        try:
+            if ur.decode([f for f in loop if f != dropped]) != payload:
+                ok_fountain = False
+        except ur.BadUR:
+            ok_fountain = False
+    check("UR parts reassemble shuffled and duplicated", ok_ur)
+    check("...and a fragment that never arrives is recovered", ok_fountain)
 
 
 def main() -> int:

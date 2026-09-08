@@ -16,10 +16,26 @@ chain, but supporting three encodings triples the surface for a device whose
 whole argument is that it renders what it signs. Every chain CELL targets has
 supported type 2 since 2021.
 
-NO CALLDATA. `data` must be empty. Arbitrary EVM calldata cannot be rendered
-as a sentence the owner can evaluate — that is a scope decision stated in
-BUILD.md section 5, and this module enforces it rather than trusting the
-caller to have checked.
+ONE SHAPE OF CALLDATA, AND THE DEVICE WRITES IT ITSELF. Arbitrary EVM calldata
+cannot be rendered as a sentence the owner can evaluate — that is the scope
+decision in BUILD.md section 5, and this module enforces it. The single
+exception is an ERC-20 `transfer(address,uint256)` to a token registered by the
+owner, and the exception is safe because of how it is taken:
+
+    The device is never handed calldata. It is handed a token, a recipient and
+    an amount, and it ENCODES the 68 bytes itself.
+
+That inverts the usual risk. A device that decodes calldata has to be right
+about every way 68 attacker-chosen bytes can be malformed, and a device that
+encodes it has to be right about one function. `__post_init__` then decodes
+what was built and checks it round-trips, so the path that reads calldata is
+exercised on every transaction without ever being the path that trusts it.
+
+The token's symbol and decimals come from `TOKENS`, which is registered out of
+band exactly as `CHAINS` is, and for the identical reason: `decimals` is a
+denomination. An attacker who supplies it supplies where the decimal point
+goes, and "1000000 units" is one USDC or one million depending on a number
+nobody can read off the screen.
 """
 
 from __future__ import annotations
@@ -37,7 +53,7 @@ TX_TYPE_1559 = 0x02
 # and so an unknown chain is a refusal rather than a number the owner cannot
 # evaluate.
 #
-# Only the two chains whose names nobody needs to be told are built in. Every
+# Only chains this project can name without being told are built in. Every
 # other EVM chain is registered by the owner, out of band, with
 # `tools/provision.py chain`. That is the whole design, not a shortcut:
 #
@@ -53,8 +69,22 @@ TX_TYPE_1559 = 0x02
 # coordinator's, which is the same argument that makes multisig quorums
 # registration-only. It also means the firmware never has to assert that some
 # chain's native token is ETH when it is not.
+# WHAT EARNS A PLACE IN THIS TABLE. Not popularity. A chain is built in when
+# the account contracts CELL signs for are deployed on it at the addresses
+# BUILD.md quotes, so that an owner who registers a smart account has a chain
+# already named for it and never has to type a chain id to get started. That
+# set is Ethereum, Base and Robinhood, plus Sepolia to rehearse on. The rest of
+# the deployment's chains -- Arbitrum, OP, MegaETH, Base Sepolia -- are one
+# `provision.py chain` away and deliberately left there: a device that ships
+# knowing every chain is a device whose chain names are somebody else's claim.
+#
+# All four are denominated in ETH. That is the only reason a ticker can be
+# asserted here rather than asked for; an L2 with its own gas token would have
+# to be registered by its owner like any other.
 CHAINS: dict[int, tuple[str, str]] = {
     1: ("Ethereum", "ETH"),
+    8453: ("Base", "ETH"),
+    4663: ("Robinhood", "ETH"),
     11155111: ("Sepolia (test)", "tETH"),
 }
 
@@ -108,6 +138,146 @@ def register_chain(chain_id: int, name: str, ticker: str) -> None:
 
 
 BUILTIN_CHAINS = dict(CHAINS)
+
+# --------------------------------------------------------------------------
+# ERC-20 tokens
+# --------------------------------------------------------------------------
+
+# {(chain_id, contract address lowercased): (symbol, decimals)}.
+#
+# NOTHING IS BUILT IN, and that is not laziness. A chain can be named from its
+# id by anyone who reads the registry, and this project can assert that chain 1
+# is Ethereum. A token contract cannot be named that way: `0xA0b8...eB48` is
+# USDC on Ethereum because Circle says so, and a device that shipped with that
+# mapping would be asserting a fact about someone else's deployment on every
+# chain its owner later registered. So the owner registers each one, having
+# checked the address against a source they trust, and the label is then their
+# claim. Same rule as CHAINS, same rule as a multisig quorum.
+#
+# Keyed on the chain as well as the address because the same address is a
+# different contract on different chains, and a token registered on Ethereum
+# must not silently name a contract on Base.
+TOKENS: dict[tuple[int, str], tuple[str, int]] = {}
+
+# A symbol has to sit after an amount without wrapping the line, on the same
+# reasoning as MAX_TICKER. 18 decimals is ether's own scale and the practical
+# ceiling; 36 is where a fixed-point amount stops fitting a screen at all.
+MAX_SYMBOL = 8
+MAX_DECIMALS = 36
+
+# transfer(address,uint256) -- keccak256 of the signature, first four bytes.
+# Checked against that derivation in the self-test rather than trusted as a
+# constant somebody typed.
+ERC20_TRANSFER = bytes.fromhex("a9059cbb")
+ERC20_TRANSFER_LEN = 4 + 32 + 32
+
+
+def register_token(chain_id: int, address: str, symbol: str,
+                   decimals: int) -> None:
+    """Teach this device one ERC-20 token, by contract, symbol and decimals.
+
+    PROVISIONING ONLY, for the reason in the note on TOKENS above. The chain
+    has to be registered first: a token on a chain the device cannot name is a
+    token whose transfers it could not render anyway, and refusing here means
+    the owner finds out while holding the device rather than while holding a
+    lancet.
+
+    Re-registering identically is a no-op; re-registering differently is
+    refused, so a second run can never silently move a symbol or a decimal
+    point that the owner has already been reading on screen.
+    """
+    if not isinstance(chain_id, int) or isinstance(chain_id, bool):
+        raise BadEthTransaction("chain id must be an integer")
+    if chain_id not in CHAINS:
+        raise BadEthTransaction(
+            f"chain {chain_id} is not registered on this device, so a token "
+            f"on it could not be displayed. Register the chain first with "
+            f"`tools/provision.py chain`.")
+    if not valid_checksum_address(address):
+        raise BadEthTransaction(
+            f"token contract {address!r} is not a valid address, or its "
+            f"EIP-55 checksum does not match its capitalisation")
+    if int(address.removeprefix("0x"), 16) == 0:
+        raise BadEthTransaction("the zero address is not a token contract")
+    if not isinstance(symbol, str) or not symbol.strip():
+        raise BadEthTransaction("token symbol must be a non-empty string")
+    if symbol != symbol.strip():
+        raise BadEthTransaction("token symbol has leading or trailing space")
+    if len(symbol) > MAX_SYMBOL:
+        raise BadEthTransaction(
+            f"token symbol {symbol!r} is longer than {MAX_SYMBOL} characters "
+            f"and would not fit beside an amount")
+    if any(c < " " or c > "~" for c in symbol):
+        raise BadEthTransaction(
+            f"token symbol {symbol!r} has characters outside printable ASCII; "
+            f"the owner cannot trust what such a label renders as")
+    if not isinstance(decimals, int) or isinstance(decimals, bool) \
+            or not 0 <= decimals <= MAX_DECIMALS:
+        raise BadEthTransaction(
+            f"token decimals must be a whole number between 0 and "
+            f"{MAX_DECIMALS}")
+    # The native ticker is what an amount of the chain's own coin is displayed
+    # in. A token that borrows it makes "1.5 ETH" ambiguous between the coin
+    # that pays the fee and the token being moved, on the same screen.
+    if symbol == CHAINS[chain_id][1]:
+        raise BadEthTransaction(
+            f"{symbol!r} is chain {chain_id}'s native ticker; a token sharing "
+            f"it would be indistinguishable from the coin paying the fee")
+    key = (chain_id, address.lower())
+    existing = TOKENS.get(key)
+    if existing is not None and existing != (symbol, decimals):
+        raise BadEthTransaction(
+            f"{address} on chain {chain_id} is already registered as "
+            f"{existing[0]!r} with {existing[1]} decimals; refusing to "
+            f"relabel it {symbol!r} with {decimals}")
+    TOKENS[key] = (symbol, decimals)
+
+
+def token_of(chain_id: int, address: str) -> tuple[str, int] | None:
+    """The (symbol, decimals) registered for a contract, or None."""
+    return TOKENS.get((chain_id, address.lower()))
+
+
+def encode_erc20_transfer(to: str, amount: int) -> bytes:
+    """Build `transfer(address,uint256)` calldata. The device's own bytes."""
+    if not valid_checksum_address(to):
+        raise BadEthTransaction(
+            f"token recipient {to!r} is not a valid address, or its EIP-55 "
+            f"checksum does not match its capitalisation")
+    if int(to.removeprefix("0x"), 16) == 0:
+        raise BadEthTransaction("refusing to send tokens to the zero address")
+    if not isinstance(amount, int) or isinstance(amount, bool) or amount < 0:
+        raise BadEthTransaction("token amount must be a non-negative integer")
+    if amount >> 256:
+        raise BadEthTransaction("token amount does not fit a uint256")
+    return (ERC20_TRANSFER
+            + bytes(12) + int(to.removeprefix("0x"), 16).to_bytes(20, "big")
+            + amount.to_bytes(32, "big"))
+
+
+def decode_erc20_transfer(data: bytes) -> tuple[str, int]:
+    """The inverse. Refuses anything that is not exactly this one call.
+
+    Strict about the twelve leading zero bytes of the address argument. ABI
+    encoding left-pads a 20-byte address into a 32-byte word, so those bytes
+    are structurally zero -- and a decoder that skips them is a decoder that
+    reads the low 20 bytes of a word carrying something else entirely and calls
+    the result a recipient.
+    """
+    if len(data) != ERC20_TRANSFER_LEN:
+        raise BadEthTransaction(
+            f"an ERC-20 transfer is {ERC20_TRANSFER_LEN} bytes of calldata, "
+            f"not {len(data)}")
+    if data[:4] != ERC20_TRANSFER:
+        raise BadEthTransaction(
+            f"calldata calls 0x{data[:4].hex()}, and the only function this "
+            f"device signs is transfer(address,uint256) "
+            f"(0x{ERC20_TRANSFER.hex()})")
+    if data[4:16] != bytes(12):
+        raise BadEthTransaction(
+            "the recipient argument is not a left-padded address")
+    to = to_checksum_address(data[16:36].hex())
+    return to, int.from_bytes(data[36:], "big")
 
 
 class BadEthTransaction(ValueError):
@@ -258,10 +428,34 @@ class EthTransaction:
         if self.gas_limit < 21000:
             raise BadEthTransaction("gas limit below the 21000 minimum for a transfer")
         if self.data:
-            raise BadEthTransaction(
-                "this device refuses transactions carrying calldata. It signs "
-                "value transfers, which it can render in full; it cannot render "
-                "an EVM call as something an owner could evaluate.")
+            # The one permitted shape, checked here rather than at the call
+            # site so nothing can construct a transaction this module would
+            # not have built itself.
+            if token_of(self.chain_id, self.to) is None:
+                raise BadEthTransaction(
+                    "this device refuses transactions carrying calldata. The "
+                    "one exception is an ERC-20 transfer to a token this "
+                    "device has been told about, and "
+                    f"{self.to} is not a registered token on chain "
+                    f"{self.chain_id}. Register it with "
+                    "`tools/provision.py token`, or send no calldata.")
+            recipient, amount = decode_erc20_transfer(self.data)
+            if encode_erc20_transfer(recipient, amount) != self.data:
+                # Unreachable through `token_transfer()` below, which is the
+                # only thing that builds this. Kept because it is the check
+                # that would catch a future path accepting calldata from
+                # outside: ABI encoding has exactly one spelling, and bytes
+                # that decode to a recipient and an amount but do not re-encode
+                # to themselves are carrying something in the padding.
+                raise BadEthTransaction(
+                    "calldata decodes to a transfer but does not re-encode to "
+                    "the bytes supplied; it carries more than it declares")
+            if self.value:
+                # The screen would have to say two amounts in two
+                # denominations, only one of which the token contract sees.
+                raise BadEthTransaction(
+                    "an ERC-20 transfer carrying native value as well is two "
+                    "transfers on one screen; this device signs one")
         if not valid_checksum_address(self.to):
             raise BadEthTransaction(
                 f"recipient {self.to!r} is not a valid address, or its EIP-55 "
@@ -307,6 +501,148 @@ class EthTransaction:
     def ticker(self) -> str:
         """The native token's symbol. Not every EVM chain denominates in ETH."""
         return CHAINS[self.chain_id][1]
+
+    # ---- the ERC-20 path ----
+
+    @property
+    def is_token_transfer(self) -> bool:
+        return bool(self.data)
+
+    def token(self) -> tuple[str, int]:
+        """(symbol, decimals) for the contract this transaction calls."""
+        found = token_of(self.chain_id, self.to)
+        if found is None:
+            raise BadEthTransaction(f"{self.to} is not a registered token")
+        return found
+
+    def token_transfer_fields(self) -> tuple[str, int]:
+        """(recipient, amount) as the calldata says, decoded not remembered.
+
+        The confirmation screen reads from here rather than from whatever was
+        passed to `token_transfer` below, so what the owner is shown comes out
+        of the bytes the signature will commit to. If the two ever disagreed,
+        the screen would follow the signature.
+        """
+        return decode_erc20_transfer(self.data)
+
+
+def token_transfer(chain_id: int, nonce: int, max_priority_fee_per_gas: int,
+                   max_fee_per_gas: int, gas_limit: int, token: str,
+                   to: str, amount: int) -> EthTransaction:
+    """An ERC-20 transfer, as an EIP-1559 transaction this device built.
+
+    `to` is the recipient of the tokens and `token` is the contract, which is
+    where the transaction is actually addressed. That inversion is the whole
+    reason this needs a named constructor rather than a raw EthTransaction:
+    getting it backwards produces a transaction that pays the token contract
+    in tokens, which is a real and unrecoverable way to lose money, and it is
+    a mistake nobody can spot on a confirmation screen because both fields are
+    addresses.
+    """
+    if token_of(chain_id, token) is None:
+        raise BadEthTransaction(
+            f"{token} is not a registered token on chain {chain_id}. This "
+            f"device will not sign a transfer of something it cannot name. "
+            f"Register it first with `tools/provision.py token`.")
+    return EthTransaction(
+        chain_id=chain_id, nonce=nonce,
+        max_priority_fee_per_gas=max_priority_fee_per_gas,
+        max_fee_per_gas=max_fee_per_gas, gas_limit=gas_limit,
+        to=token, value=0, data=encode_erc20_transfer(to, amount))
+
+
+def from_signing_payload(payload: bytes) -> EthTransaction:
+    """Rebuild a transaction from the bytes a companion wants signed.
+
+    THIS IS THE ONE PLACE THE DEVICE IS HANDED AN ENCODED TRANSACTION, and it
+    is handled by refusing to trust the encoding. EIP-4527 -- what MetaMask's
+    and Rabby's QR-account flows emit -- carries `signData`, an EIP-2718
+    payload, rather than the fields this module normally builds from. A device
+    that hashed those bytes and signed the digest would be signing something it
+    never read, which is the thing `eth.py` exists not to do.
+
+    So the bytes are decoded into fields, an EthTransaction is built from those
+    fields by the ordinary constructor -- every check in `__post_init__`
+    applies -- and then THIS module re-encodes it and compares byte for byte
+    with what arrived. What the owner sees is what the device derived, and a
+    payload carrying anything the decoder dropped fails the comparison instead
+    of being signed quietly.
+
+    That last step is what makes the round trip a security control rather than
+    a formality. RLP has non-canonical spellings -- a leading zero on an
+    integer, a long-form length prefix for a short string -- and each one
+    decodes to the same fields and re-encodes to different bytes. A device
+    without this check would display a correct summary and sign a digest over
+    a payload it had not reproduced.
+    """
+    if not payload or payload[0] != TX_TYPE_1559:
+        got = f"0x{payload[:1].hex()}" if payload else "nothing"
+        raise BadEthTransaction(
+            f"this device signs EIP-1559 (type 2) transactions; the request "
+            f"carries {got}. Legacy and EIP-2930 encodings are refused -- see "
+            f"the note at the top of eth.py.")
+    fields = rlp_decode(payload[1:])
+    if not isinstance(fields, list) or len(fields) != 9:
+        raise BadEthTransaction(
+            f"an unsigned type-2 transaction has nine RLP fields, not "
+            f"{len(fields) if isinstance(fields, list) else 'a non-list'}")
+    chain_id, nonce, tip, max_fee, gas, to, value, data, access = fields
+    for name, v in (("chain id", chain_id), ("nonce", nonce),
+                    ("max priority fee", tip), ("max fee", max_fee),
+                    ("gas limit", gas), ("value", value)):
+        if not isinstance(v, bytes):
+            raise BadEthTransaction(f"{name} is an RLP list, not an integer")
+    if not isinstance(to, bytes) or len(to) != 20:
+        # An empty `to` is a contract creation. It is legal, it is not a
+        # transfer, and there is no destination to put on the screen.
+        raise BadEthTransaction(
+            "the recipient is not a twenty-byte address. This device does not "
+            "sign contract creations.")
+    if not isinstance(data, bytes):
+        raise BadEthTransaction("calldata is an RLP list, not a byte string")
+    if access != []:
+        # Renderable in principle, and not rendered: an access list changes
+        # what the transaction costs and nothing about what it does, so it
+        # would be a field on the screen the owner could not act on.
+        raise BadEthTransaction(
+            "this device signs transactions with an empty access list")
+    tx = EthTransaction(
+        chain_id=int.from_bytes(chain_id, "big"),
+        nonce=int.from_bytes(nonce, "big"),
+        max_priority_fee_per_gas=int.from_bytes(tip, "big"),
+        max_fee_per_gas=int.from_bytes(max_fee, "big"),
+        gas_limit=int.from_bytes(gas, "big"),
+        to=to_checksum_address(to.hex()),
+        value=int.from_bytes(value, "big"),
+        data=data)
+    if tx.signing_payload() != payload:
+        raise BadEthTransaction(
+            "this device re-encodes what it was asked to sign and compares it "
+            "byte for byte. The two differ, so the payload carries something "
+            "the fields on screen do not describe. Refused.")
+    return tx
+
+
+def signature_from_raw(raw: bytes) -> bytes:
+    """The 65-byte r || s || v an EIP-4527 reply carries, out of a signed tx.
+
+    Read back out of the encoded transaction rather than passed alongside it,
+    for the same reason the confirmation screen reads a token transfer's
+    recipient out of its calldata: if the two could disagree, this is the one
+    that the chain would act on.
+    """
+    if not raw or raw[0] != TX_TYPE_1559:
+        raise BadEthTransaction("not a type-2 transaction")
+    fields = rlp_decode(raw[1:])
+    if not isinstance(fields, list) or len(fields) != 12:
+        raise BadEthTransaction("a signed type-2 transaction has twelve fields")
+    y, r, s = fields[9], fields[10], fields[11]
+    parity = int.from_bytes(y, "big")
+    if parity not in (0, 1):
+        raise BadEthTransaction("y_parity is not 0 or 1")
+    return (int.from_bytes(r, "big").to_bytes(32, "big")
+            + int.from_bytes(s, "big").to_bytes(32, "big")
+            + bytes([parity]))
 
 
 def sign(tx: EthTransaction, seckey: bytes) -> tuple[int, int, int]:
@@ -459,8 +795,27 @@ def _selftest() -> int:
         except BadEthTransaction:
             checks.append((label, True))
 
-    checks.append(("ships with only Ethereum and Sepolia",
-                   set(BUILTIN_CHAINS) == {1, 11155111}))
+    # The built-in set is asserted, not merely counted. A chain that appears
+    # here without a deliberate edit is a name the device would assert on a
+    # confirmation screen without anybody having decided it should.
+    checks.append(("ships with the chains the account contracts are on",
+                   BUILTIN_CHAINS == {1: ("Ethereum", "ETH"),
+                                      8453: ("Base", "ETH"),
+                                      4663: ("Robinhood", "ETH"),
+                                      11155111: ("Sepolia (test)", "tETH")}))
+    checks.append(("every built-in name fits the confirmation screen",
+                   all(len(n) <= MAX_CHAIN_NAME and len(t) <= MAX_TICKER
+                       and all(" " <= c <= "~" for c in n + t)
+                       for n, t in BUILTIN_CHAINS.values())))
+    def _relabel_refused(cid) -> bool:
+        try:
+            register_chain(cid, "Somewhere Else", "XYZ")
+        except BadEthTransaction:
+            return True
+        return False
+
+    checks.append(("and none of them can be relabelled",
+                   all(_relabel_refused(cid) for cid in BUILTIN_CHAINS)))
     checks.append(("an unregistered chain has no name", 42161 not in CHAINS))
 
     register_chain(42161, "Arbitrum One", "ETH")
@@ -490,6 +845,214 @@ def _selftest() -> int:
                 999, "Ether\u200dum", "ETH")
     reg_refuses("refuses a padded name", 999, " Ethereum ", "ETH")
     checks.append(("a refused registration is not recorded", 999 not in CHAINS))
+
+    # ---- rebuilding an encoded transaction (EIP-4527) ----
+    #
+    # The one place the device is handed an encoded transaction. The property
+    # that makes it safe is the round trip: decode to fields, rebuild by the
+    # ordinary constructor, re-encode, and compare byte for byte.
+    checks.append(("a signing payload rebuilds to the same transaction",
+                   from_signing_payload(t.signing_payload()) == t))
+    r0, s0, y0 = sign(t, sk)
+    checks.append(("a 65-byte signature reads back out of a signed tx",
+                   signature_from_raw(t.encode_signed(r0, s0, y0))
+                   == r0.to_bytes(32, "big") + s0.to_bytes(32, "big")
+                   + bytes([y0])))
+
+    def payload_refuses(label, fn):
+        try:
+            fn()
+            checks.append((label, False))
+        except (BadEthTransaction, BadAddress):
+            checks.append((label, True))
+
+    # RLP has non-canonical spellings. Each decodes to the same fields and
+    # re-encodes to different bytes, so a device without the comparison would
+    # display a correct summary over a digest it had not reproduced.
+    _f = rlp_decode(t.signing_payload()[1:])
+    for label, mutate in (
+        ("a leading zero on the nonce",
+         lambda f: f.__setitem__(1, b"\x00" + f[1])),
+        ("a leading zero on the value",
+         lambda f: f.__setitem__(6, b"\x00" + f[6])),
+        ("a leading zero on the chain id",
+         lambda f: f.__setitem__(0, b"\x00" + f[0])),
+    ):
+        g = list(_f)
+        mutate(g)
+        payload_refuses(f"refuses {label}",
+                        lambda g=g: from_signing_payload(
+                            bytes([TX_TYPE_1559]) + rlp_encode(g)))
+
+    payload_refuses("refuses a legacy encoding",
+                    lambda: from_signing_payload(b"\xf8" + b"\x00" * 40))
+    payload_refuses("refuses an EIP-2930 encoding",
+                    lambda: from_signing_payload(b"\x01" + rlp_encode(_f)))
+    payload_refuses("refuses an empty payload",
+                    lambda: from_signing_payload(b""))
+    payload_refuses("refuses the wrong number of fields",
+                    lambda: from_signing_payload(
+                        bytes([TX_TYPE_1559]) + rlp_encode(_f[:8])))
+    payload_refuses("refuses a contract creation",
+                    lambda: from_signing_payload(
+                        bytes([TX_TYPE_1559])
+                        + rlp_encode(_f[:5] + [b""] + _f[6:])))
+    payload_refuses("refuses a non-empty access list",
+                    lambda: from_signing_payload(
+                        bytes([TX_TYPE_1559])
+                        + rlp_encode(_f[:8] + [[[bytes(20), []]]])))
+    payload_refuses("refuses an integer field encoded as a list",
+                    lambda: from_signing_payload(
+                        bytes([TX_TYPE_1559])
+                        + rlp_encode([[]] + _f[1:])))
+    payload_refuses("refuses a signed transaction where an unsigned one belongs",
+                    lambda: from_signing_payload(
+                        t.encode_signed(r0, s0, y0)))
+    payload_refuses("refuses reading a signature out of an unsigned tx",
+                    lambda: signature_from_raw(t.signing_payload()))
+
+    # ---- ERC-20 ----
+    #
+    # The one shape of calldata this device signs. What matters here is that
+    # the encoder produces exactly what every other ERC-20 implementation
+    # does, that nothing else gets through, and that a token cannot be
+    # relabelled once the owner has been reading it on a screen.
+    from hashes import keccak256
+    checks.append(("the transfer selector is keccak of the signature",
+                   ERC20_TRANSFER
+                   == keccak256(b"transfer(address,uint256)")[:4]))
+    checks.append(("nothing ships pre-registered", TOKENS == {}))
+
+    USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+    VITALIK = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+    register_token(1, USDC, "USDC", 6)
+
+    # Byte for byte against the calldata any ERC-20 library emits: selector,
+    # the recipient left-padded into a word, then the amount.
+    want_data = ("a9059cbb"
+                 "000000000000000000000000d8da6bf26964af9d7eed9e03e53415d37aa96045"
+                 "000000000000000000000000000000000000000000000000000000000ee6b280")
+    tt = token_transfer(1, 7, 1_000_000_000, 30_000_000_000, 65_000,
+                        USDC, VITALIK, 250_000_000)
+    checks.append(("calldata matches the canonical ABI encoding",
+                   tt.data.hex() == want_data))
+    checks.append(("the transaction is addressed to the CONTRACT",
+                   tt.to == USDC))
+    checks.append(("...and carries no native value", tt.value == 0))
+    checks.append(("it reports itself a token transfer", tt.is_token_transfer))
+    checks.append(("a plain transfer does not", not t.is_token_transfer))
+    checks.append(("the token is named from the registration",
+                   tt.token() == ("USDC", 6)))
+    checks.append(("recipient and amount are decoded from the calldata",
+                   tt.token_transfer_fields() == (VITALIK, 250_000_000)))
+    checks.append(("the sighash covers the calldata",
+                   tt.sighash()
+                   != EthTransaction(**{**tt.__dict__, "data": b""}).sighash()))
+
+    # A signature over it recovers, exactly as a value transfer's does. The
+    # ERC-20 path must not become a second signing path.
+    r_, s_, y_ = sign(tt, sk)
+    checks.append(("a token transfer signs and recovers", sender(tt, r_, s_, y_) == me))
+    checks.append(("...and re-decodes from the raw transaction",
+                   rlp_decode(tt.encode_signed(r_, s_, y_)[1:])[7]
+                   == bytes.fromhex(want_data)))
+
+    # The composition that comes free: a token transfer arriving encoded is
+    # rebuilt as a token transfer, because __post_init__ is the same code.
+    checks.append(("an encoded ERC-20 transfer rebuilds as one",
+                   from_signing_payload(tt.signing_payload()) == tt))
+
+    def tok_refuses(label, fn):
+        try:
+            fn()
+            checks.append((label, False))
+        except (BadEthTransaction, BadAddress):
+            checks.append((label, True))
+
+    tok_refuses("refuses a transfer of an unregistered token",
+                lambda: token_transfer(1, 0, 1, 2, 65_000,
+                                       "0x1111111111111111111111111111111111111111",
+                                       VITALIK, 1))
+    tok_refuses("refuses a token on a chain it knows but did not register it on",
+                lambda: token_transfer(8453, 0, 1, 2, 65_000, USDC, VITALIK, 1))
+    tok_refuses("refuses tokens to the zero address",
+                lambda: token_transfer(
+                    1, 0, 1, 2, 65_000, USDC,
+                    "0x0000000000000000000000000000000000000000", 1))
+    tok_refuses("refuses an amount past a uint256",
+                lambda: token_transfer(1, 0, 1, 2, 65_000, USDC, VITALIK,
+                                       1 << 256))
+    tok_refuses("refuses a negative amount",
+                lambda: token_transfer(1, 0, 1, 2, 65_000, USDC, VITALIK, -1))
+    tok_refuses("refuses a boolean amount",
+                lambda: token_transfer(1, 0, 1, 2, 65_000, USDC, VITALIK, True))
+
+    # Calldata arriving from outside, which is the path that must stay shut.
+    tok_refuses("still refuses arbitrary calldata to a plain address",
+                lambda: EthTransaction(**{**t.__dict__, "data": b"\x01\x02\x03"}))
+    tok_refuses("refuses calldata to an address that is not a token",
+                lambda: EthTransaction(**{**t.__dict__,
+                                          "data": bytes.fromhex(want_data)}))
+    tok_refuses("refuses another selector at the token",
+                lambda: EthTransaction(
+                    **{**tt.__dict__,
+                       "data": bytes.fromhex("095ea7b3" + want_data[8:])}))
+    tok_refuses("refuses calldata of the wrong length",
+                lambda: EthTransaction(**{**tt.__dict__,
+                                          "data": tt.data + b"\x00"}))
+    tok_refuses("refuses a recipient word that is not a padded address",
+                lambda: EthTransaction(
+                    **{**tt.__dict__,
+                       "data": tt.data[:4] + b"\xff" * 12 + tt.data[16:]}))
+    tok_refuses("refuses a token transfer that also sends native value",
+                lambda: EthTransaction(**{**tt.__dict__, "value": 1}))
+
+    def token_reg_refuses(label, *a):
+        try:
+            register_token(*a)
+            checks.append((label, False))
+        except (BadEthTransaction, BadAddress):
+            checks.append((label, True))
+
+    register_token(1, USDC, "USDC", 6)          # identical repeat is a no-op
+    checks.append(("re-registering the same token is idempotent",
+                   TOKENS[(1, USDC.lower())] == ("USDC", 6)))
+    token_reg_refuses("refuses to move a registered token's decimal point",
+                      1, USDC, "USDC", 18)
+    token_reg_refuses("refuses to rename a registered token",
+                      1, USDC, "USDT", 6)
+    token_reg_refuses("refuses a token on an unregistered chain",
+                      999999, USDC, "USDC", 6)
+    token_reg_refuses("refuses the zero address as a contract",
+                      1, "0x0000000000000000000000000000000000000000", "ZERO", 6)
+    token_reg_refuses("refuses a bad EIP-55 checksum on a contract",
+                      1, "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB49", "X", 6)
+    token_reg_refuses("refuses an empty symbol", 1, VITALIK, "", 6)
+    token_reg_refuses("refuses a symbol too long for the screen",
+                      1, VITALIK, "T" * (MAX_SYMBOL + 1), 6)
+    token_reg_refuses("refuses a symbol with a direction override",
+                      1, VITALIK, "US‮DC", 6)
+    token_reg_refuses("refuses a padded symbol", 1, VITALIK, " USDC ", 6)
+    token_reg_refuses("refuses decimals past the ceiling",
+                      1, VITALIK, "BIG", MAX_DECIMALS + 1)
+    token_reg_refuses("refuses negative decimals", 1, VITALIK, "NEG", -1)
+    token_reg_refuses("refuses boolean decimals", 1, VITALIK, "BOO", True)
+    # A token calling itself ETH on Ethereum would put two different things
+    # under one denomination on the same screen: the tokens moving and the
+    # coin paying the fee.
+    token_reg_refuses("refuses a symbol that shadows the native ticker",
+                      1, VITALIK, "ETH", 18)
+    checks.append(("a refused token registration is not recorded",
+                   (1, VITALIK.lower()) not in TOKENS))
+
+    # Zero decimals is legal and some real tokens use it.
+    register_token(137, "0x1111111111111111111111111111111111111111", "WHOLE", 0)
+    checks.append(("a zero-decimal token is registrable",
+                   token_of(137, "0x1111111111111111111111111111111111111111")
+                   == ("WHOLE", 0)))
+    checks.append(("the same address on another chain is a different token",
+                   token_of(1, "0x1111111111111111111111111111111111111111")
+                   is None))
 
     ok = True
     for label, good in checks:

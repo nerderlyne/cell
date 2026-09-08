@@ -1,10 +1,10 @@
 """The airgap — chopping a PSBT into QR frames and putting it back together.
 
-The device has no wifi, no bluetooth and no USB data path, so every byte in or
-out crosses as pixels. A signed PSBT is a few hundred bytes to a few kilobytes
-and a QR code holds far less than that at a density a 240x240 screen can show
-and a cheap webcam can read, so transfers are animated: a loop of frames the
-other side reassembles.
+The device has no wifi and no bluetooth, and on the shipped build no USB data
+path either, so every byte in or out crosses as pixels. A signed PSBT is a few
+hundred bytes to a few kilobytes, and a QR code holds far less than that at a
+density a 240x240 screen can show and a cheap webcam can read, so transfers are
+animated: a loop of frames the other side reassembles.
 
 FRAMING. The `pNofM` convention, as used by Specter, Sparrow and SeedSigner:
 

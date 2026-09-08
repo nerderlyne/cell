@@ -56,5 +56,17 @@ DeviceAllow=/dev/gpiochip0 rw
 DeviceAllow=/dev/video0 rw
 DevicePolicy=closed
 
+# THE USB-C DATA VARIANT, and only that variant, also needs the gadget port:
+#
+#   DeviceAllow=/dev/ttyGS0 rw
+#
+# It is commented out on purpose. A camera build has no such node and does not
+# want the line, and a line that is harmless on one build and a data path on
+# another should not arrive by default. Uncomment it only on a build wired per
+# BUILD.md section 11's USB-C variant, having read what section 16 says it
+# costs. The `video0` line above then does nothing and can come out: the two
+# cannot both be present, because there is one data-capable USB port and the
+# webcam is what the variant unplugs.
+
 [Install]
 WantedBy=multi-user.target

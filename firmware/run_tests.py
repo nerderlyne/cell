@@ -67,6 +67,12 @@ SUITES = [
      [sys.executable, "seedstore.py"]),
     ("QR transport — framing and hostile frames",
      [sys.executable, "qr.py"]),
+    # The other framing, and the one interoperability depends on getting byte
+    # exact: the fountain mixtures are a function of a seeded PRNG, an alias
+    # table and a particular shuffle, so this suite runs the reference
+    # implementation's own published vectors rather than our own output.
+    ("UR transport — the published UR2.0 vectors, and hostile frames",
+     [sys.executable, "ur.py"]),
     ("secure element driver — interface conformance",
      [sys.executable, "se_atecc.py"]),
     # The config zone is the one part of the build a mistake in is permanent,
@@ -81,6 +87,16 @@ SUITES = [
      [sys.executable, "buttons.py"]),
     ("camera — transfer collection and hostile frames",
      [sys.executable, "camera.py"]),
+    # The USB build variant's framing. Opt-in, and off on every build BUILD.md
+    # section 1 describes -- but the framing is checked here regardless,
+    # because a variant nobody tests is a variant that breaks silently.
+    ("USB link — framing, resynchronisation, hostile streams",
+     [sys.executable, "link.py"]),
+    # The other end of that wire. Checked here rather than left to a builder,
+    # because the two ends agreeing on the framing is the only thing that
+    # makes either of them useful, and they are in different directories.
+    ("USB companion — the host side, against the device's own framing",
+     [sys.executable, "../tools/companion.py", "selftest"]),
     ("wallet — end to end, and every footgun we could name",
      [sys.executable, "test_wallet.py"]),
     ("application loop — the seams between the parts",

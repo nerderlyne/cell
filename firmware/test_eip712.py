@@ -46,6 +46,7 @@ MAIL_DIGEST = bytes.fromhex(
 ACCOUNT = "0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC"
 IMPL = "0xD54cb65224410F3Ff97a8E72f363f224419f4FB0"
 BOB = "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"
+EXECUTOR = "0x00000000a72A30AdBf38e14d36BCE2610ec3973F"
 COW = "0xCD2a3d9F938E13CD947Ec05AbC7FE734Df8DD826"
 
 
@@ -82,7 +83,7 @@ def published_vectors() -> bool:
 
 
 def account() -> SmartAccount:
-    return SmartAccount(label="treasury", address=ACCOUNT, chain_id=1,
+    return SmartAccount(label="treasury", address=ACCOUNT, chain_ids=(1, 8453),
                         implementation=IMPL, implementation_label="Multisig v1",
                         threshold=2, owners=(COW, BOB, IMPL))
 
@@ -107,21 +108,21 @@ def struct_layout() -> bool:
 def binding() -> bool:
     """Every field must move the digest. One that does not is not committed to."""
     a = account()
-    base = a.spend_digest(BOB, 10**18, 7)
+    base = a.spend_digest(BOB, 10**18, 7, 1)
     from dataclasses import replace
     moves = [
-        ("chain id", replace(a, chain_id=11155111).spend_digest(BOB, 10**18, 7)),
-        ("account address", replace(a, address=IMPL).spend_digest(BOB, 10**18, 7)),
-        ("domain name", replace(a, domain_name="Other").spend_digest(BOB, 10**18, 7)),
-        ("domain version", replace(a, domain_version="2").spend_digest(BOB, 10**18, 7)),
-        ("destination", a.spend_digest(COW, 10**18, 7)),
-        ("amount", a.spend_digest(BOB, 10**18 + 1, 7)),
-        ("account nonce", a.spend_digest(BOB, 10**18, 8)),
+        ("chain id", a.spend_digest(BOB, 10**18, 7, 8453)),
+        ("account address", replace(a, address=IMPL).spend_digest(BOB, 10**18, 7, 1)),
+        ("domain name", replace(a, domain_name="Other").spend_digest(BOB, 10**18, 7, 1)),
+        ("domain version", replace(a, domain_version="2").spend_digest(BOB, 10**18, 7, 1)),
+        ("destination", a.spend_digest(COW, 10**18, 7, 1)),
+        ("amount", a.spend_digest(BOB, 10**18 + 1, 7, 1)),
+        ("account nonce", a.spend_digest(BOB, 10**18, 8, 1)),
     ]
     checks = [(f"{name} changes the digest", d != base) for name, d in moves]
     checks.append(("all seven digests are distinct",
                    len({base, *(d for _, d in moves)}) == 8))
-    checks.append(("same inputs, same digest", a.spend_digest(BOB, 10**18, 7) == base))
+    checks.append(("same inputs, same digest", a.spend_digest(BOB, 10**18, 7, 1) == base))
     return _report(checks)
 
 
@@ -130,7 +131,7 @@ def refusals() -> bool:
     return _report([
         ("calldata is refused",
          _raises(eip712.execute_struct_hash, BOB, 1, b"\xa9\x05\x9c\xbb", 0)),
-        ("a self-call is refused", _raises(a.spend_digest, ACCOUNT, 1, 0)),
+        ("a self-call is refused", _raises(a.spend_digest, ACCOUNT, 1, 0, 1)),
         ("a nonce past uint32 is refused",
          _raises(eip712.execute_struct_hash, BOB, 1, b"", 2**32)),
         ("a value past uint256 is refused",
@@ -164,9 +165,9 @@ def registration() -> bool:
          _raises(eip712.register_account, replace(a, label="other"))),
         ("an unregistered label is refused", _raises(eip712.account, "nope")),
         ("an unregistered chain is refused",
-         _raises(eip712.register_account, replace(a, label="x", chain_id=999999))),
+         _raises(eip712.register_account, replace(a, label="x", chain_ids=(999999,)))),
         ("chain 0 is refused",
-         _raises(eip712.register_account, replace(a, label="x", chain_id=0))),
+         _raises(eip712.register_account, replace(a, label="x", chain_ids=(0,)))),
         ("the zero address is refused",
          _raises(eip712.register_account,
                  replace(a, label="x", address=eip712.ZERO_ADDRESS))),
@@ -351,7 +352,7 @@ def second_opinion() -> bool:
                 {"name": "nonce", "type": "uint32"}]},
         "primaryType": "Execute",
         "domain": {"name": a.domain_name, "version": a.domain_version,
-                   "chainId": a.chain_id, "verifyingContract": a.address},
+                   "chainId": a.chain_ids[0], "verifyingContract": a.address},
         "message": {"target": BOB, "value": 10**18, "data": b"", "nonce": 7},
     }
     # SignableMessage is (version, header, body): the 0x01 version byte, the
@@ -374,16 +375,25 @@ def second_opinion() -> bool:
     # somebody who is not an owner.
     import secp256k1 as ec
     from addresses import eth_address
-    digest = a.spend_digest(BOB, 10**18, 7)
+    digest = a.spend_digest(BOB, 10**18, 7, 1)
     r, s_, rec = ec.ecdsa_sign(digest, sk, grind_low_r=False)
     sig = r.to_bytes(32, "big") + s_.to_bytes(32, "big") + bytes([27 + (rec & 1)])
     recovered = Account._recover_hash(digest, signature=sig)
 
     return _report([
         ("eth_account agrees on the domain separator",
-         bytes(m.header) == a.separator()),
+         bytes(m.header) == a.separator(1)),
         ("eth_account agrees on the Execute struct hash",
          bytes(m.body) == eip712.execute_struct_hash(BOB, 10**18, b"", 7)),
+        ("eth_account agrees on the cancelQueued Execute struct hash",
+         bytes(encode_typed_data(full_message={
+             **typed,
+             "message": {"target": a.address, "value": 0,
+                         "data": eip712.CANCEL_QUEUED_SELECTOR + b"\xab" * 32,
+                         "nonce": 9}}).body)
+         == eip712.cancel_struct_hash(a.address, b"\xab" * 32, 9)),
+        ("the selector is keccak('cancelQueued(bytes32)')[:4]",
+         eip712.CANCEL_QUEUED_SELECTOR.hex() == "5eeaf382"),
         ("eth_account agrees on the signing digest", theirs == digest),
         ("eth_account agrees on the EIP-7702 authorisation hash",
          their_auth == eip712.delegation_digest(1, IMPL, 3)),
@@ -431,7 +441,23 @@ def end_to_end() -> bool:
     prov = wallet.provision(MNEMONIC, se, PIN, script_types=("p2wpkh",))
     fw, cal = b"\x11" * 32, b"\x22" * 32
     eip712.ACCOUNTS.clear()
-    eip712.register_account(account())
+    me = _expected_address()
+    # The device has to be an owner of anything it signs for, so the fixture
+    # that reaches the wallet layer carries this seed's own address. The
+    # account() fixture above is about digests and does not go through
+    # register_smart_account.
+    from dataclasses import replace as _replace
+    treasury = _replace(account(), owners=(COW, BOB, me),
+                        delay_seconds=172800, executor=EXECUTOR,
+                        fast_track=True)
+    prov.register_smart_account(treasury)
+    # And a 7702 delegation is only ever of THIS device's key, so the
+    # delegated-EOA fixture is registered at the device's own address.
+    mine = eip712.SmartAccount(
+        label="mine", address=me, chain_ids=(1,), implementation=IMPL,
+        implementation_label="Multisig v1", threshold=2, owners=(me, BOB),
+        delegated_eoa=True)
+    prov.register_smart_account(mine)
     shown: list[list[str]] = []
 
     def confirm(lines):
@@ -439,11 +465,14 @@ def end_to_end() -> bool:
         return True
 
     spend = wallet.sign_account_execute(
-        "treasury", BOB, 10**18, 7, prov, se, pol_mod.Policy(), fw, cal,
+        "treasury", BOB, 10**18, 7, 1, prov, se, pol_mod.Policy(), fw, cal,
         confirm, gate_ok, PIN)
     deleg = wallet.sign_delegation(
-        "treasury", ACCOUNT, 3, prov, se, pol_mod.Policy(), fw, cal,
+        "mine", me, 3, 1, prov, se, pol_mod.Policy(), fw, cal,
         confirm, gate_ok, PIN)
+    cancel = wallet.sign_account_cancel(
+        "treasury", "0x" + "ab" * 32, 9, 1, prov, se, pol_mod.Policy(), fw,
+        cal, confirm, gate_ok, PIN)
 
     def refused(fn):
         try:
@@ -457,7 +486,7 @@ def end_to_end() -> bool:
         ("v is 27 or 28, as the contract's ECDSA branch requires",
          spend.signature[64] in (27, 28)),
         ("the digest returned is the one the account will check",
-         spend.digest == "0x" + account().spend_digest(BOB, 10**18, 7).hex()),
+         spend.digest == "0x" + treasury.spend_digest(BOB, 10**18, 7, 1).hex()),
         ("it recovers to the address this seed derives",
          spend.signer_address == _expected_address()),
         ("the spend ran at touch tier", spend.tier is pol_mod.Tier.TOUCH),
@@ -477,25 +506,56 @@ def end_to_end() -> bool:
         # at blood tier, and delegates their own.
         ("a delegation for an address the device was not told about is refused",
          refused(lambda: wallet.sign_delegation(
-             "treasury", COW, 3, prov, se, pol_mod.Policy(), fw, cal,
+             "mine", COW, 3, 1, prov, se, pol_mod.Policy(), fw, cal,
              confirm, gate_ok, PIN))),
+        # The account this device is an OWNER of is not an address it can
+        # delegate: delegating signs with the device's own key, so a 7702
+        # request naming the contract account would delegate the device while
+        # the screen named the treasury.
+        ("delegating a contract account this device merely co-owns is refused",
+         refused(lambda: wallet.sign_delegation(
+             "treasury", ACCOUNT, 3, 1, prov, se, pol_mod.Policy(), fw, cal,
+             confirm, gate_ok, PIN))),
+        ("a spend on a chain the account is not registered on is refused",
+         refused(lambda: wallet.sign_account_execute(
+             "treasury", BOB, 1, 0, 11155111, prov, se, pol_mod.Policy(), fw,
+             cal, confirm, gate_ok, PIN))),
+        ("a spend on the account's second chain signs",
+         len(wallet.sign_account_execute(
+             "treasury", BOB, 1, 0, 8453, prov, se, pol_mod.Policy(), fw, cal,
+             confirm, gate_ok, PIN).signature) == 65),
+        ("the timelock is on the spend screen",
+         any("HELD 2d" in ln for ln in spend.display)),
+        ("so is the fast track, with the owner count",
+         any("all 3 owners" in ln for ln in spend.display)),
+        ("a cancel signs, at touch tier",
+         len(cancel.signature) == 65 and cancel.tier is pol_mod.Tier.TOUCH),
+        ("the cancel digest is the Execute digest over cancelQueued calldata",
+         cancel.digest == "0x" + treasury.cancel_digest(
+             bytes.fromhex("ab" * 32), 9, 1).hex()),
+        ("the queued hash is on the cancel screen in full",
+         any("ab" * 8 in ln for ln in cancel.display)),
+        ("the zero hash is refused",
+         refused(lambda: wallet.sign_account_cancel(
+             "treasury", "0x" + "00" * 32, 9, 1, prov, se, pol_mod.Policy(),
+             fw, cal, confirm, gate_ok, PIN))),
         ("the screen names the implementation, not the account",
          any("Multisig v1" in ln for ln in deleg.display)),
         ("an unregistered account cannot be spent from",
          refused(lambda: wallet.sign_account_execute(
-             "nope", BOB, 1, 0, prov, se, pol_mod.Policy(), fw, cal,
+             "nope", BOB, 1, 0, 1, prov, se, pol_mod.Policy(), fw, cal,
              confirm, gate_ok, PIN))),
         ("declining at the confirmation signs nothing",
          refused(lambda: wallet.sign_account_execute(
-             "treasury", BOB, 1, 0, prov, se, pol_mod.Policy(), fw, cal,
+             "treasury", BOB, 1, 0, 1, prov, se, pol_mod.Policy(), fw, cal,
              lambda _l: False, gate_ok, PIN))),
         ("a failed gate signs nothing",
          refused(lambda: wallet.sign_account_execute(
-             "treasury", BOB, 1, 0, prov, se, pol_mod.Policy(), fw, cal,
+             "treasury", BOB, 1, 0, 1, prov, se, pol_mod.Policy(), fw, cal,
              confirm, lambda _t: (False, {}), PIN))),
         ("a wrong PIN signs nothing",
          refused(lambda: wallet.sign_account_execute(
-             "treasury", BOB, 1, 0, prov, se, pol_mod.Policy(), fw, cal,
+             "treasury", BOB, 1, 0, 1, prov, se, pol_mod.Policy(), fw, cal,
              confirm, gate_ok, "00000000"))),
     ]
     eip712.ACCOUNTS.clear()

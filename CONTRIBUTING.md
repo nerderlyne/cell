@@ -95,6 +95,16 @@ device render everything it signs as a sentence a human can check. Every
 addition spends some of that, so the bar is high. It is a discussion and not a
 wall: open an issue before writing the code.
 
+One addition has cleared that bar. The **ERC-20 transfer** is signed, because
+it is the operation a treasury signer is asked for most and because its
+calldata has exactly one shape: the device does not read those bytes, it
+*writes* them from a token, a recipient and an amount, and both addresses go on
+the screen in full. An addition needs an argument of that shape. Not "this
+would be useful", but "here is why the device can still render it, and here is
+the field that would otherwise be a caption on a screen instead of a fact about
+the signature". `approve` did not clear it, and no other selector has been
+proposed.
+
 **A score, a model, or a learned classifier in place of the named thresholds.**
 Someone who is not the author has to be able to read `blood_gate.py` and see why
 a sample passed. A trained model cannot be audited by the person whose keys
@@ -130,7 +140,7 @@ pip install -r firmware/requirements.txt
 python firmware/run_tests.py
 ```
 
-No hardware needed. 46 suites covering the signing stack, the gates, the tier
+No hardware needed. 49 suites covering the signing stack, the gates, the tier
 policy, the attestation format and the calibration round trip. `VALIDATION.md`
 is the engineering status record.
 

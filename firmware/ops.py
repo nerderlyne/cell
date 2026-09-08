@@ -16,6 +16,9 @@ So the operation set is CLOSED. Five spending shapes, all renderable:
     NoteSpend           a confidential note, its amount, the recipient owner
     DirectTransfer      a transfer to a named pubkey on either chain
     EthereumSpend       an EIP-1559 transfer, with the chain, nonce and fee cap
+    TokenTransfer       an ERC-20 transfer of a token the owner registered.
+                        The one operation carrying calldata, and the device
+                        writes those bytes itself rather than reading them
     SmartAccountExecute a transfer out of a registered smart account, as
                         EIP-712 typed data. No gas, because it does not build
                         the transaction that carries it
@@ -29,7 +32,11 @@ and two that spend nothing:
                    operation that signs with no spend key at all
 
 Everything else is refused, including generic EVM calldata and bare hashes.
-This is a scope decision — see BUILD.md section 5.
+This is a scope decision — see BUILD.md section 5. The ERC-20 transfer is the
+one addition to that list, and it earned its place by being the operation a
+treasury signer is asked for most and the only calldata with a fixed shape:
+one selector, two arguments, both of them things the screen already shows.
+`approve` is not here, and neither is any other selector.
 
 The renderer is the security control here. Every field that
 changes what the signature authorises appears in the rendered text, so what the
@@ -90,6 +97,52 @@ def format_eth(wei: int, ticker: str = "ETH") -> str:
     if frac:
         return f"{whole}.{frac:018d}".rstrip("0").rstrip(".") + f" {ticker}"
     return f"{whole} {ticker}"
+
+
+def format_token(units: int, decimals: int, symbol: str) -> str:
+    """A token amount at the decimal place its registration declares.
+
+    `decimals` never arrives with a transaction -- see eth.TOKENS. It is where
+    the decimal point goes, so a request that could supply it could render
+    1,000,000 units of a 6-decimal token as "1000000 USDC" on a screen the
+    owner then approves, and move a million dollars for a signature they
+    believed authorised one.
+    """
+    if units < 0:
+        raise ValueError("negative amount")
+    if not 0 <= decimals <= 36:
+        raise ValueError(f"implausible decimals: {decimals}")
+    if not decimals:
+        return f"{units} {symbol}"
+    whole, frac = divmod(units, 10 ** decimals)
+    if frac:
+        return (f"{whole}.{frac:0{decimals}d}".rstrip("0").rstrip(".")
+                + f" {symbol}")
+    return f"{whole} {symbol}"
+
+
+def format_duration(seconds: int) -> str:
+    """A timelock as a human reads one. Never bare seconds.
+
+    "QUEUES FOR 172800 s" is a number nobody converts under a confirmation
+    screen, and the whole argument for putting the delay on the screen is that
+    the owner can act on what it says. Rounding down would understate a
+    timelock, so the remainder is carried rather than dropped: 90000 s reads
+    "1d 1h", not "1d".
+    """
+    if seconds < 0:
+        raise ValueError("negative duration")
+    if seconds == 0:
+        return "none"
+    parts = []
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60), ("s", 1)):
+        count, seconds = divmod(seconds, size)
+        if count:
+            parts.append(f"{count}{unit}")
+    # Two units is the most that ever helps. "2d 3h 4m 5s" is a string the
+    # owner reads as noise; "2d 3h" is one they can act on, and the residue
+    # cannot change a decision a delay of days is already dominating.
+    return " ".join(parts[:2])
 
 
 def wrap_full(value: str, width: int, indent: str = "           ") -> list[str]:
@@ -400,6 +453,108 @@ class EthereumSpend:
         return lines
 
 
+# What `TokenTransfer.amount_for_policy` answers with. See the note there: a
+# token amount is not comparable to a floor denominated in the chain's native
+# unit, so the answer is a number no floor is above rather than a number that
+# might quietly be below one.
+UNPRICEABLE = (1 << 256) - 1
+
+
+@dataclass(frozen=True)
+class TokenTransfer:
+    """An ERC-20 transfer, with the token named rather than its address alone.
+
+    THE TWO ADDRESSES ARE THE WHOLE DIFFICULTY. An ERC-20 transfer is addressed
+    to the token contract and carries the recipient in its calldata, so a
+    screen showing one address is showing the wrong one, and a screen showing
+    two unlabelled addresses is worse. So both are here, both in full, and the
+    recipient comes first because it is the one the owner is checking.
+
+    The contract is shown too, and not as decoration. `symbol` is the owner's
+    own registration and the contract address is what the signature commits
+    to, so the pair is what lets an owner catch the one attack this operation
+    is exposed to: a request naming a token they registered, addressed to a
+    contract they did not. Nothing about "250 USDC" on a screen distinguishes
+    real USDC from a contract somebody deployed yesterday, and the address
+    does.
+    """
+
+    amount_units: int               # the token's own smallest unit
+    decimals: int                   # from the registration, never the request
+    symbol: str                     # likewise
+    destination: str                # who receives the tokens, EIP-55
+    contract: str                   # the token contract, EIP-55
+    chain_id: int
+    chain_name: str
+    nonce: int
+    max_fee_wei: int                # gas_limit * max_fee_per_gas, the worst case
+    ticker: str = "ETH"             # the chain's native coin, which pays the fee
+
+    def op_class(self) -> str:
+        return "tx.token"
+
+    def amount_for_policy(self) -> int:
+        """The fee, or a number above every floor. Never the token amount.
+
+        `Policy.blood_above` is denominated in the smallest unit of the chain
+        -- wei here -- and a token amount is not that. 250 USDC is 250000000
+        units, which compares below one ether's 10^18 wei, so returning the
+        token amount would price a large stablecoin transfer BENEATH a floor
+        meant to catch it. That is the failure this project has already fixed
+        once, in EthereumSpend, where a fee cap routed value past the floor.
+
+        The device holds no oracle and cannot convert, so it does not guess.
+        Any positive token amount answers UNPRICEABLE, which is above every
+        floor an owner can set, and the tier follows.
+
+        WHAT THAT DOES AND DOES NOT DO. With any amount floor configured, a
+        token transfer needs blood. With `blood_above=None` -- the default,
+        meaning the owner switched amount-based escalation off -- the amount is
+        not consulted for ANY operation, and a token transfer runs at touch
+        tier exactly as a thousand-ether transfer does. An owner who wants
+        tokens gated regardless puts "tx.token" in `Policy.blood_locked`,
+        which is what that field is for.
+        """
+        return max(UNPRICEABLE if self.amount_units else 0, self.max_fee_wei)
+
+    def render(self) -> list[str]:
+        if not self.destination or not self.contract:
+            raise UnrenderableOperation(
+                "a token transfer needs both a recipient and a contract")
+        if self.amount_units < 0 or self.max_fee_wei < 0 or self.nonce < 0:
+            raise UnrenderableOperation("negative amount, fee or nonce")
+        if not self.chain_name:
+            raise UnrenderableOperation(
+                f"chain {self.chain_id} has no name; the owner cannot tell "
+                f"which network this lands on")
+        if not self.symbol:
+            raise UnrenderableOperation(
+                "the token has no symbol; an amount with no denomination is "
+                "not a number the owner can evaluate")
+        if not self.ticker:
+            raise UnrenderableOperation(
+                f"chain {self.chain_id} has no native-token ticker, so the "
+                f"fee cannot be denominated")
+        if self.destination.lower() == self.contract.lower():
+            # transfer(token, n) sends tokens to the contract itself, where
+            # essentially none of them can be recovered. It is what a request
+            # that confused its two address fields produces, and it is not
+            # something an owner can catch by reading two identical strings.
+            raise UnrenderableOperation(
+                "the recipient is the token contract itself; tokens sent "
+                "there are not recoverable")
+        lines = [f"SEND {self.symbol} ON {self.chain_name.upper()}",
+                 f"  amount   {format_token(self.amount_units, self.decimals, self.symbol)}",
+                 "  to"]
+        lines += wrap_full(self.destination, DISPLAY_COLS)
+        lines.append(f"  {self.symbol} contract")
+        lines += wrap_full(self.contract, DISPLAY_COLS)
+        lines.append(f"  max fee  {format_eth(self.max_fee_wei, self.ticker)}")
+        lines.append(f"  chain id {self.chain_id}")
+        lines.append(f"  nonce    {self.nonce}")
+        return lines
+
+
 @dataclass(frozen=True)
 class SmartAccountExecute:
     """A value transfer out of a registered smart account, as EIP-712 typed data.
@@ -426,6 +581,13 @@ class SmartAccountExecute:
     chain_name: str
     nonce: int                      # the ACCOUNT's nonce, not an EOA's
     ticker: str = "ETH"
+    # The account's timelock, and whether every owner together can skip it.
+    # Both come from the device's own registration, never from the request:
+    # see eip712.SmartAccount. They change nothing about the digest and
+    # everything about what the owner is agreeing to.
+    delay_seconds: int = 0
+    fast_track: bool = False
+    owner_count: int = 0
 
     def op_class(self) -> str:
         return "tx.send"
@@ -472,7 +634,38 @@ class SmartAccountExecute:
         lines.append(f"  chain    {self.chain_name} ({self.chain_id})")
         lines.append(f"  nonce    {self.nonce}")
         lines.append("  fee      paid by whoever relays it")
+        lines += self._timing()
         return lines
+
+    def _timing(self) -> list[str]:
+        """When this executes, which the digest does not say and the owner must.
+
+        The signature commits to (target, value, data, nonce). Whether that
+        runs in the next block or in two days is the account's `delay`, held in
+        its storage, and whether the delay can be skipped is the executor's
+        `forwardEnabled`. Neither is in the message, so both are read off the
+        device's own registration and stated here.
+        """
+        if self.delay_seconds < 0 or self.owner_count < 0:
+            raise UnrenderableOperation("negative delay or owner count")
+        if not self.delay_seconds:
+            if self.fast_track:
+                raise UnrenderableOperation(
+                    "a fast track is recorded over no timelock; there would "
+                    "be nothing for it to skip, so the record is wrong")
+            return ["  timing   runs as soon as it is relayed"]
+        held = format_duration(self.delay_seconds)
+        if not self.fast_track:
+            return [f"  timing   HELD {held} after relay"]
+        if self.owner_count < 1:
+            raise UnrenderableOperation(
+                "a fast track needs every owner's signature and no owner "
+                "count is recorded, so the screen cannot say how many")
+        # Named as a floor and a ceiling, not as one number. The owner is
+        # consenting to both outcomes with one signature, so both are on the
+        # screen and the cheaper one is not buried.
+        return [f"  timing   HELD {held} after relay,",
+                f"           or now if all {self.owner_count} owners sign"]
 
 
 @dataclass(frozen=True)
@@ -533,6 +726,78 @@ class Delegation:
         lines.append(f"  nonce    {self.nonce}")
         lines.append("  EFFECT   this address runs that")
         lines.append("           code until delegated again")
+        lines.append("  CHECK    read the account's owners")
+        lines.append("           back before you fund it")
+        return lines
+
+
+@dataclass(frozen=True)
+class CancelQueued:
+    """Stop a transaction the account's timelock is already holding.
+
+    The one self-call this device signs, and the reason it can keep refusing
+    the others. A timelock's whole value is the window it opens between a
+    transaction being authorised and it running; cancelling is what an owner
+    does IN that window, and a device that can start a delay but not stop one
+    has given its owner a countdown and no button.
+
+    IT IS THE DEFENSIVE DIRECTION, AND IT IS PRICED THAT WAY. `account.cancel`
+    is deliberately not in `policy.ALWAYS_BLOOD`. Everything this operation can
+    do is subtract: it moves no value, it cannot create a transaction, and the
+    worst outcome of signing one wrongly is that a transfer the owner wanted
+    has to be proposed again. Meanwhile the case for cancelling is usually that
+    something is wrong and the clock is running. Pricing that at ten minutes
+    and a lancet would mean the expensive gate stands between an owner and the
+    stop button, which is the one place a gate must never stand.
+
+    WHAT THE OWNER CHECKS. The hash, in full. It is what the account stores in
+    `queued`, and the companion shows the same value beside the transaction it
+    belongs to. Nothing on this screen can say what that transaction DOES --
+    the account records a hash, not a payload -- so the screen does not
+    pretend to, and says what it is instead.
+    """
+
+    account_label: str
+    account_address: str            # the account cancelling, EIP-55
+    tx_hash: str                    # the queued transaction's hash, 0x + 64 hex
+    chain_id: int
+    chain_name: str
+    nonce: int                      # the account's nonce for THIS cancel
+
+    def op_class(self) -> str:
+        return "account.cancel"
+
+    def amount_for_policy(self) -> int:
+        return 0
+
+    def render(self) -> list[str]:
+        if not self.account_label or not self.account_address:
+            raise UnrenderableOperation("cancel names no account")
+        if self.nonce < 0:
+            raise UnrenderableOperation("negative nonce")
+        if self.chain_id <= 0 or not self.chain_name:
+            raise UnrenderableOperation(
+                f"chain {self.chain_id} has no name; the owner cannot tell "
+                f"which network this lands on")
+        h = self.tx_hash
+        if not isinstance(h, str) or not h.startswith("0x") or len(h) != 66 \
+                or any(c not in "0123456789abcdefABCDEF" for c in h[2:]):
+            raise UnrenderableOperation(
+                "a queued-transaction hash is 0x and 64 hex characters")
+        if int(h, 16) == 0:
+            # `queued[0]` is never set, so this cancels nothing and would burn
+            # an account nonce to do it. It is also what an empty field
+            # serialises to, which is the likelier way to arrive here.
+            raise UnrenderableOperation(
+                "refusing to cancel the zero hash; no transaction has it")
+        lines = [f"CANCEL A QUEUED TRANSACTION",
+                 f"  account  {self.account_label}",
+                 "  queued tx"]
+        lines += wrap_full(h, DISPLAY_COLS)
+        lines.append(f"  chain    {self.chain_name} ({self.chain_id})")
+        lines.append(f"  nonce    {self.nonce}")
+        lines.append("  EFFECT   that transaction will not")
+        lines.append("           run. Nothing is sent.")
         return lines
 
 
@@ -647,7 +912,8 @@ class PolicyChange:
 # before it reaches the renderer, so an unknown type cannot reach the key by
 # arriving with a render() method that returns something plausible.
 ALLOWED = (BitcoinSpend, NoteSpend, DirectTransfer, EthereumSpend,
-           SmartAccountExecute, Delegation, ProofOfLife, PolicyChange)
+           TokenTransfer, SmartAccountExecute, Delegation, CancelQueued,
+           ProofOfLife, PolicyChange)
 
 
 # The closed set, as data rather than as a table inside parse(). policy.py
@@ -659,8 +925,10 @@ OPERATIONS = {
     "note_spend": NoteSpend,
     "transfer": DirectTransfer,
     "eth_spend": EthereumSpend,
+    "token_transfer": TokenTransfer,
     "account_execute": SmartAccountExecute,
     "account_delegate": Delegation,
+    "account_cancel": CancelQueued,
     "proof_of_life": ProofOfLife,
     "policy_change": PolicyChange,
 }

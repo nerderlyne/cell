@@ -22,6 +22,7 @@ A refusal is the pass condition for every one of them.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import sys
 
@@ -404,6 +405,37 @@ def main() -> int:
     ms, members = multisig_parts(root)
     prov.register_multisig(ms)
     ms_blob = build_multisig_psbt(ms, members)
+
+    # The address the device SHOWS and the output it RECOGNISES have to be the
+    # same arithmetic. RECEIVE derives forwards from the descriptor;
+    # _input_info matches backwards from what a PSBT claims. If those two ever
+    # disagreed, the owner would fund one wallet and the device would watch
+    # another -- and nothing else in this file would notice, because every
+    # other check works only from the PSBT side.
+    desc = prov.descriptors()[0]
+    for br, ix in ((0, 0), (1, 0), (0, 7)):
+        want, pairs = multisig_script_at(ms, members, br, ix)
+        want_spk = addresses.p2wsh_script(want)
+        if ms.wrapped:
+            want_spk = addresses.p2sh_script(want_spk)
+        check(f"the descriptor derives {br}/{ix} to the script built by hand",
+              desc.script_pubkey_at(br, ix) == want_spk)
+        check(f"...and recognises that same script from a PSBT at {br}/{ix}",
+              desc.script_pubkey_for(
+                  {pk: fp + b"".join(i.to_bytes(4, "little") for i in path)
+                   for fp, path, pk in pairs}) == want_spk)
+    check("the shown address round-trips back to the shown script",
+          addresses.address_to_script(desc.address_at(0, 0, "mainnet"))
+          == desc.script_pubkey_at(0, 0))
+    def _no_address(d) -> bool:
+        try:
+            d.script_pubkey_at(0, 0)
+        except addresses.BadAddress:
+            return True
+        return False
+
+    check("a quorum with an impossible threshold shows no address",
+          _no_address(dataclasses.replace(desc, threshold=9)))
 
     ms_lines = {}
     res = run_psbt(ms_blob, se, prov,

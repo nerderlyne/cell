@@ -42,7 +42,7 @@ built it. The frame is `diagrams/first-build.png`, IPFS
 
 ## Verified in CI, every commit
 
-`python firmware/run_tests.py`, 46 suites, no hardware required.
+`python firmware/run_tests.py`, 49 suites, no hardware required.
 
 ### The signing stack
 
@@ -89,7 +89,48 @@ trip against our own implementation proves nothing, so none of these are that.
 | Speckle physics | Ornstein-Uhlenbeck field, exposure-integrated | Reproduces frozen and liquid limits; exposure, frame interval and grain each swept against the G5/G6 thresholds |
 | Drift margins | 7 disturbance axes, bisected | Tightest budget reported and ranked; a finite tolerance on an invariance axis fails the suite |
 | Mechanical drawing | Regenerated from the mesh | Byte-identical, enforced in CI |
-| A fresh clone | `git clone`, install, `run_tests.py` | 46 suites pass; every path and command the docs name resolves; the LFS mesh arrives as a mesh; all four generators reproduce `models/`, `diagrams/` and `viewer/` byte for byte |
+| A fresh clone | `git clone`, install, `run_tests.py` | 49 suites pass; every path and command the docs name resolves; the LFS mesh arrives as a mesh; all four generators reproduce `models/`, `diagrams/` and `viewer/` byte for byte |
+
+### The two QR framings
+
+`firmware/qr.py` and `firmware/ur.py`. The second is the one interoperability
+turns on, so it is checked against the reference implementation's own published
+vectors rather than against our output — the fountain mixture in part 13 of a
+transfer is a function of a seeded PRNG, an alias table and a particular
+shuffle, and a subtly wrong one produces plausible URs nothing else can read.
+
+| Case | Method | Result |
+|---|---|---|
+| CRC-32, Bytewords | BCR-2020-012 published values | Byte-exact, both encode and decode; a bad checksum refused |
+| Xoshiro256\*\* | Three published streams, 100 draws each: seeded from a string, from a CRC-32, and through `next_int` | Exact, including `next_int`'s inclusive upper bound |
+| Alias sampler | 500 published draws | Exact, including the two-draw sampling and the reversed index fill both being observable |
+| Fisher-Yates | Ten published permutations | Exact |
+| Degree chooser | 200 published nonces | Exact |
+| Fragment selection | 30 published parts, mixtures included | Exact |
+| Nominal fragment length, partition | Published values, padding included | Exact |
+| Single-part UR | Published string, 50-byte message | String-exact |
+| Multipart UR | Published strings, 20 parts of a 256-byte message at a 30-byte fragment | String-exact, all twenty |
+| The fountain property | Decode from the mixtures alone, out of order, with every duplicate a loop produces, and with one pure fragment permanently missing | Reconstructs in every case; the same transfer in `pNofM` cannot, however long it loops |
+| Hostile frames | A UR type this device does not read, a type outside the alphabet, two transfers mixed on screen, two types mixed, a fragment replaced mid-scan with every checksum recomputed, outer and inner headers disagreeing, a `seqLen` or `messageLen` past the ceiling, a payload the wrong size for its claims, a reassembled message failing its own checksum, CBOR nested past its bound, a float, an indefinite-length string | All refused; an incomplete transfer yields nothing at all |
+| Byte-for-byte equivalence | The same PSBT through `pNofM`, through UR, and through the USB link | Identical bytes reach `classify` by all three routes |
+| EIP-4527 | An `eth-sign-request` round trips through the codec and through a whole UR transfer; the reply is tag 402 with the request id echoed and 65 bytes of r, s and v | Exact. Hostile requests refused: the wrong tag, a non-map, an unknown map key, a missing field, sign data past the ceiling, a path deeper than the device renders, a 19-byte address, a keypath under the wrong tag or with a non-boolean hardened flag |
+| crypto-account export | Every descriptor this device exports, against BCR-2020-015's own published vector, derived from its own test seed | All four byte-exact as substrings of the published CBOR: `pkh` at m/44h/0h/0h, `sh(wpkh)` at m/49h, `wpkh` at m/84h, `tr` at m/86h. The account is tag 311 with the fingerprint and one output each; a testnet key declares coin-info and a mainnet one leaves it at the default; an exported key is always compressed and never claims to be private; both hardened spellings parse; a path that does not start at m, a non-numeric level, an index past 31 bits and an empty level are refused |
+| Transfer direction | Collecting a UR type this device only emits | Refused, naming the direction. `crypto-account` and `eth-signature` are answers, so a scan that reassembled one would be reading a signer's screen, not a coordinator's |
+| Rebuilding an encoded transaction | `eth.from_signing_payload` on a canonical payload, then on payloads that decode to the same fields and re-encode differently | The round trip rebuilds exactly; a leading zero on the nonce, the value or the chain id is refused, as are a legacy or EIP-2930 encoding, an empty payload, the wrong field count, a contract creation, a non-empty access list, an integer encoded as a list, and a signed transaction where an unsigned one belongs |
+
+### The USB link variant
+
+`firmware/link.py`. Opt-in, off on every build `BUILD.md` §1 describes, and
+tested regardless: a variant nobody tests is a variant that breaks silently.
+The gadget port itself needs hardware — see "Written but unverified".
+
+| Case | Result |
+|---|---|
+| Framing | One newline-terminated message per line; round trips, empty payload included |
+| Resynchronisation | A stream joined halfway through recovers on the next message |
+| Junk on the wire | Getty banners, modem probes, a bad tag, a body that is not base64: all reported and stepped over, never interpreted |
+| Delivery shape | A message arriving a byte at a time reassembles; two back to back both read |
+| Bounds | A message past the line cap refused; an unterminated stream discarded rather than accumulated; silence times out; BACK leaves the waiting screen |
 
 ### Multisig, and the registry it depends on
 
@@ -132,6 +173,11 @@ and camera. The seams between parts that are individually correct.
 | Hostile input | A PSBT with none of our keys, a truncated one, a two-destination one, a QR that is not a transaction, foreign JSON, an Ethereum request with an unknown or missing field. Every one refused as a readable screen, never a traceback |
 | An incomplete scan | Reported in words instead of hung on |
 | Ethereum | Signed; chain, chain id, nonce and worst-case fee all on screen; raw transaction emitted as a typed envelope |
+| ERC-20 | A registered token signs; the screen names the token, shows the amount at the registered decimals, and shows BOTH the recipient and the contract in full; no calldata reaches the screen; the emitted raw transaction carries the bytes the device encoded. An unregistered token is refused before the gate, with the command that fixes it on screen. A request carrying a `data` field is refused by name |
+| Either QR framing | A PSBT arriving as UR signs identically to one arriving as `pNofM`, carries the same attestation, and is answered in the framing it arrived in — checked both ways round |
+| The USB variant | A PSBT arriving over the wire signs; the gate still runs; the destination is still shown in full; nothing is put on screen as a QR; the reply goes back down the wire. Silence on the wire is a readable screen, not a hang |
+| Exporting the accounts | DOWN, then CONFIRM on THIS DEVICE | Emitted as `ur:crypto-account` with one descriptor per Bitcoin script type and none for `eth`; the warning about what an xpub reveals is shown before the QR; every exported key is one the recorded xpubs hold, compressed and public; BACK at the warning shows nothing; nothing was unlocked to build it |
+| EIP-4527, end to end | A request from a browser wallet signs; the amount and chain are rendered from the REBUILT transaction; the reply is an `eth-signature` and recovers to this device's own address. Data types 1, 3 and 4 are each refused by name before the gate runs, as are a payload that does not re-encode to itself, a request for another derivation path, one naming another address, and an outer chain id disagreeing with the payload it carries |
 | Multisig | A registered quorum signs and shows its threshold; an unregistered one is refused before the gate |
 | Tier policy | A spend above the floor demands blood and says what that costs; a small one runs at touch |
 | Read-only screens | The receiving address matches what the seed derives, with nothing unlocked to show it |
@@ -277,10 +323,15 @@ misbehave and watching it refuse tests the property itself.
 | **EIP-7702 digest** | `keccak(0x05 \|\| rlp([chain_id, address, nonce]))` against RLP built independently in the test | Identical. Chain id, address and nonce each move it |
 | **Refusals** | Calldata, a self-call, a nonce past the account's uint32, a value past uint256, a failed EIP-55 checksum, a short address, a non-string address, chain id 0 on a delegation | Each raises. None is masked or truncated |
 | **Registration** | Twelve hostile registrations: a second account under one label, one address under two labels, an unregistered chain, chain 0, the zero address, a self-implementation, a threshold past the owner count, a repeated owner, a label carrying a control character | All refused |
-| **The screens** | Both operations rendered at 40x20 with the tier footer reserved | Both fit in 11 rows. Destination, account and implementation are shown in full, never abbreviated |
+| **The screens** | All three operations rendered at 40x20 with the tier footer reserved | All fit. Destination, account, implementation and the queued-transaction hash are shown in full, never abbreviated. **Found one line over the panel**: the fast-track disclosure was 42 columns and refused to render, which would have made every timelocked account unsignable |
+| **The timelock on the screen** | The recorded `delay` and `fast_track` against what `SmartAccountExecute` renders | A non-zero delay reads `HELD 2d after relay`, and with the executor enabled a second line names the unanimous route. A fast track recorded over no delay is refused as an incoherent record rather than rendered |
+| **The cancel calldata** | `cancelQueued(bytes32)` selector recomputed from the string, and the whole Execute struct hash against `eth_account`'s encoder with the calldata inlined | Selector is `0x5eeaf382`. The struct hash agrees. It is the only calldata shape the module can produce: the selector is a constant and the sole variable is 32 bytes |
+| **Device membership** | Registering an EVM account whose owners do not include this device's address; a delegated-EOA record at an address that is not this device's | Both refused, at registration and again at signing time. The delegation check is repeated at signing because a record written by older firmware never went through registration |
 | **Against the library every coordinator uses** | `eth_account`: the domain separator, the Execute struct hash, the signing digest, and `Account.sign_authorization` for the EIP-7702 hash | All four agree. It also recovers a signature this device made to the address this device derives, which is what settles `v = 27 + y_parity`. **Found nothing in the implementation, and one bug in the check itself**: the first version compared our digest against the wrong two thirds of a `SignableMessage` and reported a disagreement that was not there |
-| **The whole chain, on a soft chip** | `sign_account_execute` and `sign_delegation` driven end to end: confirm, PIN, gate, unwrap, sign, attest | Signs, and the signature recovers to the address the mnemonic derives through an independent BIP-39 to BIP-32 to EIP-55 walk. `v` is 27 or 28, which is the branch the account contract reads as ECDSA. Declining, a failed gate, a wrong PIN and an unregistered account each sign nothing |
-| **Tier policy** | `account.delegate` against `ALWAYS_BLOOD` | Blood at any amount, with no policy able to unlock it |
+| **The whole chain, on a soft chip** | `sign_account_execute`, `sign_account_cancel` and `sign_delegation` driven end to end: confirm, PIN, gate, unwrap, sign, attest | Signs, and the signature recovers to the address the mnemonic derives through an independent BIP-39 to BIP-32 to EIP-55 walk. `v` is 27 or 28, which is the branch the account contract reads as ECDSA. Declining, a failed gate, a wrong PIN and an unregistered account each sign nothing |
+| **Tier policy** | `account.delegate` and `account.cancel` against `ALWAYS_BLOOD` | Delegation is blood at any amount, with no policy able to unlock it. Cancelling is touch, deliberately: it only ever subtracts, and the expensive gate must not stand between an owner and the stop button |
+| **Through the device loop** | All three request types held up to the camera as QR and run through `app.run_once`: scan, classify, parse, render, confirm, PIN, gate, sign, emit | Each signs and emits a typed envelope carrying the digest, which is recomputed in the test and compared. A chain the account is not registered on, and a delegation naming a contract account this device merely co-owns, are both refused **before the gate**. **This path did not exist**: `classify` knew a PSBT and `cell-eth-tx` and nothing else, so `sign_account_execute` and `sign_delegation` were library functions no device could reach |
+| **The runbook, end to end** | `provision.py smart-account` and `verify-account` driven as subprocesses against the directory the earlier commands wrote, the way BUILD.md section 12 writes them | Registers across two chains, refuses an account this device is not an owner of, defaults `--delegated-eoa` to the device's own address, and fails a state dump whose owners were swapped. **Found the flag that made the 7702 path unusable**: `--implementation-label` did not exist, so every account registered through this command produced a delegation `ops.Delegation.render` refused to draw |
 
 ### Open on this path
 
@@ -299,18 +350,31 @@ misbehave and watching it refuse tests the property itself.
   `[chain_id, address, nonce]` and not to the `init` call that runs beside it,
   so a relayer can delegate to the approved implementation and initialise it
   with their own owners. This is security consideration 2 of EIP-7702. It
-  cannot be closed by signing the authorisation alone. The device records the
-  expected owners and threshold at registration; nothing checks them against
-  the chain.
+  cannot be closed by signing the authorisation alone. **Partly mitigated.**
+  The device records the expected owners, threshold, delay, executor and
+  implementation at registration, and `provision.py verify-account` diffs them
+  against a state dump the companion reads off the chain, exiting non-zero on
+  any disagreement and separately when this device is not an owner on chain.
+  That closes the transcription half. It does not close the gap itself: the
+  dump is only as good as the RPC behind it, and nothing forces an owner to
+  run the command.
 - **The delegated-EOA superuser.** A 7702 delegation leaves the EOA key able to
   send ordinary transactions and to revoke the delegation. Guards and timelocks
   on such an account bound a relayer, not the key holder. Recorded by
   `--delegated-eoa` and stated on the registration screen; there is nothing to
   verify, only something not to forget.
 - **Governance calls are refused rather than rendered.** Owner changes,
-  threshold changes and cancelling a queued transaction are all calldata. A
-  fixed selector table would make them renderable. Until then the device cannot
+  threshold changes and delay changes are all calldata, and remain refused.
+  ~~cancelling a queued transaction~~ **Closed for cancellation only.**
+  `cancelQueued(bytes32)` is decoded and rendered, because a device that can
+  start a timelock but not stop one has given its owner a countdown and no
+  button. It is the only selector the firmware knows, and deliberately so: one
+  selector is one sentence to get right. The device still cannot otherwise
   administer an account it can spend from.
+- **The fast track is recorded, not observed.** `forwardEnabled` and the
+  executor address come from the owner's registration. A device told the fast
+  track is off when it is on states a timelock more absolute than the account
+  enforces. `verify-account` is the check; nothing else is.
 
 ## Proof of life
 
@@ -449,6 +513,12 @@ snapshot are independent: one stops a mutation, the other stops it mattering.
 | **The sealed case, thermally** | The enclosure has no ventilation and cannot be given any: §10 constraint 1 requires the fifteen vents to stay blind pockets, because a through-hole lets ambient light into the optical chamber and Gate 1 stops working. A rough energy balance is reassuring, ~3 W across 0.0275 m² of shell is a 12–14 °C rise, so a 25 °C room puts the SoC near 55–60 °C against an 80 °C cap. Treat that as indicative only: it lumps convection and radiation into one coefficient and ignores the air gap between die and shell, so the junction can sit above it, and it says nothing about a device left somewhere hot. PETG also carries the screw preload through six heat-set inserts and softens from about 80 °C | `bench.py thermal --load 4`, case closed |
 | **The supply, under a real load** | §11 budgets 5 V at 2 A because the Zero 2 W peaks near 0.5 A and a blood run has the webcam, laser and LEDs drawing together. A supply or cable that sags does not announce itself; it shows up as under-voltage flags and, eventually, as behaviour nobody can reproduce | The same run, `bench.py thermal` reads `get_throttled` |
 | `firmware/qr.py` on real optics | The framing and reassembly are tested; scanning a real 240×240 screen with a real webcam is not | Scan a signed PSBT into a coordinator and back |
+| `firmware/ur.py` against real coordinators | Every published vector passes, so the encoding is right. Whether Sparrow, Nunchuk or a Keystone-compatible coordinator accepts this device's URs end to end has not been run | Scan a signed PSBT into Sparrow over UR, and back |
+| EIP-4527 against a real browser wallet | The codec matches the specification and the refusals are covered, both against requests this repository builds. No request from an actual MetaMask or Rabby QR account has been through this device | Add the device as a QR account in MetaMask, send a testnet transfer, broadcast the reply |
+| The `v` byte in an `eth-signature` | This device emits the y-parity, 0 or 1, rather than the 27-based form. Implementations differ on it and the EIP does not settle it, so the reply is correct by one reading and off by 27 under the other. Nothing here can decide it | Recover the sender from a reply in the companion. A correct r and s with the wrong address is this byte |
+| HWI, and the coordinators that use it | `tools/companion.py` is the host end of the wire and both ends share one framing, checked in CI. A driver inside the `hwi` package -- which is what makes Bitcoin Core, Sparrow and Specter drive a device directly -- is not written, and belongs in that package rather than here | Write the driver, or drive the device through PSBT files with `companion.py send` |
+| `firmware/link.py` on the gadget port | The framing, the bounds and the resynchronisation are covered against a fake port. `dtoverlay=dwc2`, libcomposite and `/dev/ttyGS0` are not, and neither is HWI on top of them | Bring the gadget up on a built device, then drive it from Bitcoin Core |
+| The USB variant's power budget | §11 asks for 5 V at 2 A with the webcam, laser and LEDs live. The variant drops the webcam, and whether a host port can then carry a blood run is arithmetic nobody has measured | Meter the 5 V rail through a blood run on a host-powered device |
 | **The optical PUF, as optics** | `firmware/optical_puf.py` derives a term of the wrapping key from laser speckle off a diffuser epoxied into the chamber, so reflashing means opening the chamber, which changes the speckle, which means the key stops existing rather than being wrong. Two parts of this are answered without hardware and two are not. **Verified independently:** the BCH dimensions against published code tables at three lengths, 47 parameter sets, plus the designed roots being roots of the generator and the generator dividing x^n − 1. **Verified against a simulated field with a drift model:** code-offset reproduction, the leakage argument against a repetition code, registration over ±24 px of translation and ~3° of rotation, and the min-entropy of the selected bits, measured on every run with the two NIST SP 800-90B estimators, most-common-value and order-1 Markov, and the smaller taken. Min-entropy rather than Shannon because the helper's n−k disclosure is paid out of an attacker's best single guess: this selection is 0.99 bits of Shannon and 0.78 of min-entropy, and asserting the first would have claimed ~800 bits that are not there. It was 0.42 before the quantile transform, since ranking cells by reliability selects the bright tail of an exponential distribution. `calibrate.py puf-panel` re-measures it on a real chamber rather than inheriting the simulated figure. **Not answered by any of it:** whether a real epoxied diffuser holds its pattern | A puf-panel in `calibrate.py` once a chamber exists |
 | **PUF enrolment across temperature** | Speckle moves with laser wavelength at ~0.25 nm/K, and the case is sealed (see the thermal row above), so the chamber is warmer after a ten-minute capture than at cold boot. Take ~3.3 nm as an upper bound rather than a prediction: 0.25 nm/K is a bare-diode figure and the BOM specifies a driver module, and the 12–14 °C rise is the shell's, while the optical chamber is a separate volume from the Pi bay and may see considerably less. What the bound does not depend on is its own size. The direction is what matters. Reliability masking enrols across several reads, but reads taken back to back share one temperature and the mask that comes out is optimistic. The failure it lets through is the one the fuzzy extractor exists to prevent: a device that reproduces all afternoon and bricks on a cold morning. **Enrol across thermal states, not only across repetitions** | Enrol cold, re-read after `bench.py thermal --load 4`, and check the BER between them against the code's correction budget |
 | Attestation key custody | The ATECC608B signs NIST P-256 only, so the secp256k1 attestation scalar is derived from a chip secret and exists in RAM while signing, rather than never leaving the chip | Stated in `se_atecc.py`; switch `attest.py` to P-256 if you need the stronger property |
@@ -505,6 +575,22 @@ Milestone 5 in `BUILD.md` §15, spectrum of dye against your own blood, is the
 "it works" moment, and it is reachable in a weekend.
 
 ## Not yet built
+
+- **UR export of a multisig quorum.** Single-sig accounts export as
+  `ur:crypto-account` and are checked against BCR-2020-015's published vector.
+  A registered quorum does not, because its descriptor is
+  `wsh(sortedmulti(k, ...))` over keys this device holds only one of — the
+  co-signers' xpubs are in the record, so it is buildable, and it needs the
+  `sortedmulti` expression and a decision about whether a device should hand
+  out other people's keys on a button press. `provision.py show` prints the
+  descriptor as text in the meantime.
+
+- **ERC-20 `approve`.** Renderable, deliberately absent. An unlimited approval
+  to a hostile spender drains an account with no further signature, which is
+  the risk profile of an EIP-7702 delegation rather than of a transfer. If it
+  is added it belongs in `policy.ALWAYS_BLOOD`, with `2^256-1` refused
+  outright and the spender required to be on the recipient allowlist — and
+  that allowlist has to exist first.
 
 - **Duress, on the read-only screens.** Signing is closed on both chains:
   two PINs, two wrapped seeds, two recorded wallets, and `test_wallet.py`

@@ -356,6 +356,32 @@ class MultisigDescriptor:
         p2wsh = addresses.p2wsh_script(ws)
         return addresses.p2sh_script(p2wsh) if self.wrapped else p2wsh
 
+    def script_pubkey_at(self, change: int, index: int) -> bytes:
+        """The scriptPubKey this quorum produces at one derivation suffix.
+
+        The methods above answer "is this output ours?" from what a PSBT
+        claims. This one asks the question forwards, from the descriptor
+        alone, so the device can SHOW an address rather than only recognise
+        one. Same ordering rule, same wrapping, same arithmetic -- deliberately
+        the same code path as far as `multisig_script`, because an address the
+        device displays and an output it recognises that disagreed would be a
+        quorum whose owner funds one wallet and watches another.
+        """
+        if not 1 <= self.threshold <= self.n:
+            raise addresses.BadAddress(
+                f"{self.threshold} of {self.n} is not a usable quorum")
+        pubkeys = [xpub.derive([change, index]).pubkey
+                   for _fp, _prefix, xpub in self.keys]
+        ordered = sorted(pubkeys) if self.sorted_keys else pubkeys
+        p2wsh = addresses.p2wsh_script(
+            addresses.multisig_script(self.threshold, ordered))
+        return addresses.p2sh_script(p2wsh) if self.wrapped else p2wsh
+
+    def address_at(self, change: int, index: int,
+                   network: str = "mainnet") -> str:
+        return addresses.script_to_address(
+            self.script_pubkey_at(change, index), network)
+
 
 # --------------------------------------------------------------------------
 # Per-input analysis

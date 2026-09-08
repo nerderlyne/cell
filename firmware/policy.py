@@ -58,6 +58,13 @@ class Op(str):
 # can emit.
 KNOWN_OPS = frozenset({
     "tx.send",
+    # An ERC-20 transfer. Priced separately from "tx.send" because the amount
+    # cannot be compared against blood_above at all -- a token has its own
+    # unit and this device holds no oracle. ops.TokenTransfer answers the
+    # amount question with a number above every floor, so any floor at all
+    # reaches it; an owner who wants it gated with no floor set puts it in
+    # `blood_locked`.
+    "tx.token",
     "note.spend",
     "policy.change",
     "key.export",
@@ -65,6 +72,10 @@ KNOWN_OPS = frozenset({
     "device.reprovision",
     "recipient.allowlist",
     "account.delegate",
+    # Cancelling a queued transaction. Touch tier by design, not by omission:
+    # it only ever subtracts, and the expensive gate must not stand between an
+    # owner and the stop button. See ops.CancelQueued.
+    "account.cancel",
     # A beacon moves nothing, so no amount floor reaches it, and it must stay
     # cheap: proof of life that costs a lancet is proof of life nobody
     # produces, and a dead-man switch that fires on the living is worse than

@@ -191,12 +191,55 @@ class Provisioning:
     # EVM chains the owner registered, {chain_id: (name, ticker)}. Applied to
     # eth.CHAINS when the record is loaded; see tools/provision.py chain.
     chains: dict[int, tuple[str, str]] = field(default_factory=dict)
+    # ERC-20 tokens the owner registered, {(chain_id, address): (symbol,
+    # decimals)}. Applied to eth.TOKENS at load; see tools/provision.py token.
+    # Recorded rather than accepted from a payload for the reason in eth.TOKENS:
+    # `decimals` is where the decimal point goes, and a request that supplies
+    # it supplies what the amount on screen means.
+    tokens: dict[tuple[int, str], tuple[str, int]] = field(default_factory=dict)
     # Smart accounts the owner registered, and the implementations they run.
     # Applied to eip712.ACCOUNTS when the record is loaded; see
     # tools/provision.py smart-account. Recorded rather than accepted from a
     # payload because an EIP-712 signature is bound to a verifyingContract,
     # and an attacker who picks that address picks which account is spent from.
     smart_accounts: list["eip712.SmartAccount"] = field(default_factory=list)
+
+    def account_export(self) -> bytes:
+        """This device's watch-only accounts, as a `ur:crypto-account` body.
+
+        WHAT IT IS FOR. Setting up a coordinator without anybody transcribing
+        an xpub. That transcription is where a character gets dropped, and a
+        wallet built on a wrong xpub watches addresses nobody can spend from
+        and shows the owner a receive address that is not theirs.
+
+        WHAT IT COSTS. An account xpub reveals every address the wallet will
+        ever use, forever. That is the ordinary bargain of a watch-only setup
+        and it is not free, which is why this is emitted on a button press and
+        never offered unasked.
+
+        NO SEED, NO PIN. Built from the recorded xpubs, like `eth_address`:
+        everything in it is public. Only the Bitcoin script types are
+        exported. The `eth` account is not a descriptor -- Ethereum has no
+        output script -- and the multisig accounts are not either, because a
+        quorum needs its co-signers' keys and this device holds only its own
+        share. `descriptors()` below is the multisig path.
+        """
+        import ur
+        out = []
+        for a in self.accounts:
+            if a.script_type not in ur.SCRIPT_EXPRESSIONS:
+                continue
+            node = a.key()
+            out.append(ur.encode_output(a.script_type, ur.encode_hdkey(
+                node.pubkey, node.chain_code, a.path,
+                self.master_fingerprint, node.parent_fp,
+                testnet=a.network != "mainnet")))
+        if not out:
+            raise WalletError(
+                "this device has no Bitcoin accounts to export. Ethereum has "
+                "no output descriptor, and a quorum needs keys this device "
+                "does not hold.")
+        return ur.encode_account(self.master_fingerprint, out)
 
     def descriptors(self, network: str = "mainnet") -> list:
         return [m.descriptor() for m in self.multisig if m.network == network]
@@ -254,6 +297,70 @@ class Provisioning:
         if any(m.label == ms.label for m in self.multisig):
             raise WalletError(f"a quorum labelled {ms.label!r} is already registered")
         self.multisig.append(ms)
+
+    def eth_address(self, index: int = 0) -> str:
+        """This device's own Ethereum address, from the watch-only record.
+
+        Derived from the recorded xpub, so it needs no seed and no PIN: it is
+        public, and every use of it is a use that has to happen with the device
+        closed. Registering a smart account needs it (the device must be one of
+        the owners), delegating an EOA needs it (the EOA must be this one), and
+        a co-signer building the quorum needs to be told it.
+        """
+        from addresses import eth_address as _to_address
+        acct = self.account_for("eth", "ethereum")
+        node = ExtendedKey.deserialize(acct.xpub).derive([0, index])
+        return _to_address(node.pubkey)
+
+    def register_smart_account(self, acct: "eip712.SmartAccount") -> None:
+        """Record an EVM account, refusing one this device has no part in.
+
+        THE SAME RULE AS register_multisig, FOR THE SAME REASON. That method
+        refuses a Bitcoin quorum this device holds no key in, because a device
+        that will register a quorum it is not a member of is a device that will
+        call somebody else's address its own. The EVM side had no such check at
+        all: any address could be registered, and the device would take a drop
+        of blood and hand back a signature the account then rejects, because
+        the signer was never an owner. The owner pays the gate before anything
+        on chain can tell them.
+
+        Two shapes, one rule.
+
+          A CONTRACT ACCOUNT. This device's address has to be among the owners.
+          Nothing here can prove the deployment agrees -- see verify-account --
+          but a record that does not even claim we are an owner is one nobody
+          should be asked to bleed for.
+
+          A DELEGATED EOA. The account has to BE this device's address. A 7702
+          authorisation does not commit to the address it delegates: the
+          authority is whoever signs it. So delegating "someone else's EOA" is
+          not a thing that can happen -- what happens is that THIS key gets
+          delegated while the screen names another address.
+        """
+        acct.check()
+        mine = self.eth_address()
+        if acct.delegated_eoa:
+            if acct.address.lower() != mine.lower():
+                raise WalletError(
+                    f"account {acct.label!r} is recorded as a delegated EOA at "
+                    f"{acct.address}, but this device's address is {mine}. A "
+                    f"7702 authorisation commits to the implementation and the "
+                    f"chain, never to the address being delegated -- signing "
+                    f"this would delegate {mine}, whatever the screen said.")
+        elif acct.owners and not any(o.lower() == mine.lower()
+                                     for o in acct.owners):
+            raise WalletError(
+                f"this device's address ({mine}) is not among the owners of "
+                f"{acct.label!r}. Every signature it made for that account "
+                f"would be rejected, after the gate had already been paid.")
+        elif not acct.owners:
+            raise WalletError(
+                f"no owners recorded for {acct.label!r}, so this device cannot "
+                f"tell whether it is one of them. List them with --owners; "
+                f"`verify-account` checks them against the deployment.")
+        eip712.register_account(acct)
+        self.smart_accounts = [a for a in self.smart_accounts
+                               if a.label != acct.label] + [acct]
 
     def account_for(self, script_type: str, network: str = "mainnet") -> Account:
         for a in self.accounts:
@@ -782,8 +889,36 @@ def sign_beacon(registry: str, claimant: str, chain_id: int, epoch: int,
                         tier=result.tier, display=result.display)
 
 
+def sign_account_cancel(label: str, tx_hash: str, nonce: int, chain_id: int,
+                        prov: Provisioning, se: SecureElement,
+                        pol: Policy, fw_hash: bytes, cal_hash: bytes,
+                        confirm, run_gate, pin: str, index: int = 0,
+                        requested_tier: Tier | None = None,
+                        read_chamber=None) -> SignedTypedData:
+    """Cancel a transaction the account's timelock is holding.
+
+    Routed by the companion through `TimelockExecutor.forward`, which takes the
+    account's threshold for a cancel rather than every owner -- stopping
+    something has to be at least as easy as starting it. The digest is the
+    account's ordinary Execute digest over `cancelQueued(hash)` calldata, so
+    the same signature works if the companion sends it straight to the account
+    instead.
+    """
+    acct = eip712.account(label)
+    chain_id = acct.on_chain(chain_id)
+    op = ops.CancelQueued(
+        account_label=acct.label, account_address=acct.address,
+        tx_hash=tx_hash, chain_id=chain_id,
+        chain_name=eth.CHAINS[chain_id][0], nonce=nonce)
+    digest = acct.cancel_digest(bytes.fromhex(tx_hash[2:]), nonce, chain_id)
+    return _sign_typed(op, digest, prov, se, pol, fw_hash, cal_hash,
+                       confirm, run_gate, pin, index, requested_tier,
+                       read_chamber)
+
+
 def sign_account_execute(label: str, destination: str, amount_wei: int,
-                         nonce: int, prov: Provisioning, se: SecureElement,
+                         nonce: int, chain_id: int,
+                         prov: Provisioning, se: SecureElement,
                          pol: Policy, fw_hash: bytes, cal_hash: bytes,
                          confirm, run_gate, pin: str, index: int = 0,
                          requested_tier: Tier | None = None,
@@ -796,18 +931,22 @@ def sign_account_execute(label: str, destination: str, amount_wei: int,
     the owner is spending from.
     """
     acct = eip712.account(label)
+    chain_id = acct.on_chain(chain_id)
     op = ops.SmartAccountExecute(
         amount_wei=amount_wei, destination=destination,
         account_label=acct.label, account_address=acct.address,
-        chain_id=acct.chain_id, chain_name=eth.CHAINS[acct.chain_id][0],
-        ticker=eth.CHAINS[acct.chain_id][1], nonce=nonce)
-    digest = acct.spend_digest(destination, amount_wei, nonce)
+        chain_id=chain_id, chain_name=eth.CHAINS[chain_id][0],
+        ticker=eth.CHAINS[chain_id][1], nonce=nonce,
+        delay_seconds=acct.delay_seconds, fast_track=acct.fast_track,
+        owner_count=len(acct.owners))
+    digest = acct.spend_digest(destination, amount_wei, nonce, chain_id)
     return _sign_typed(op, digest, prov, se, pol, fw_hash, cal_hash,
                        confirm, run_gate, pin, index, requested_tier,
                        read_chamber)
 
 
 def sign_delegation(label: str, account_address: str, nonce: int,
+                    chain_id: int,
                     prov: Provisioning, se: SecureElement, pol: Policy,
                     fw_hash: bytes, cal_hash: bytes, confirm, run_gate,
                     pin: str, index: int = 0,
@@ -830,18 +969,32 @@ def sign_delegation(label: str, account_address: str, nonce: int,
     eip712.py records `verifyingContract` rather than accepting it.
     """
     acct = eip712.account(label)
+    chain_id = acct.on_chain(chain_id)
     if account_address.lower() != acct.address.lower():
         raise WalletError(
             f"account {label!r} is registered at {acct.address}, and the "
             f"request asked to delegate {account_address}. A 7702 signature "
             f"does not commit to the address it delegates, so this device "
             f"only delegates one it was told about in advance.")
+    # And the address it delegates is this device's own key, whatever the
+    # record says. register_smart_account refuses a delegated-EOA record that
+    # is not this device, but a record written by an older firmware, or one
+    # restored from a directory this device did not provision, would not have
+    # been through that check. The signature is made HERE, so the check is
+    # made here too.
+    mine = prov.eth_address(index)
+    if acct.address.lower() != mine.lower():
+        raise WalletError(
+            f"this device's address is {mine}, and {label!r} is registered at "
+            f"{acct.address}. A 7702 authorisation delegates whoever signs "
+            f"it, so this would delegate {mine} while the screen named "
+            f"another address.")
     op = ops.Delegation(
         account_address=acct.address, implementation=acct.implementation,
         implementation_label=acct.implementation_label,
-        chain_id=acct.chain_id,
-        chain_name=eth.CHAINS[acct.chain_id][0], nonce=nonce)
-    digest = eip712.delegation_digest(acct.chain_id, acct.implementation, nonce)
+        chain_id=chain_id,
+        chain_name=eth.CHAINS[chain_id][0], nonce=nonce)
+    digest = eip712.delegation_digest(chain_id, acct.implementation, nonce)
     return _sign_typed(op, digest, prov, se, pol, fw_hash, cal_hash,
                        confirm, run_gate, pin, index, requested_tier,
                        read_chamber)
@@ -864,10 +1017,27 @@ def sign_eth(tx: eth.EthTransaction, prov: Provisioning, se: SecureElement,
             "this device has no eth account on ethereum. Provision one before "
             "asking it to sign for that chain.")
 
-    op = ops.EthereumSpend(amount_wei=tx.value, destination=tx.to,
-                           chain_id=tx.chain_id, chain_name=tx.chain_name(),
-                           ticker=tx.ticker(),
-                           nonce=tx.nonce, max_fee_wei=tx.max_fee_wei())
+    # Which operation this is, decided by the transaction rather than by the
+    # caller. `is_token_transfer` is true exactly when there is calldata, and
+    # eth.EthTransaction has already refused every shape of calldata but one,
+    # so there is no third case to get wrong here.
+    #
+    # The token screen reads its recipient and amount back OUT of the calldata
+    # rather than from anything passed alongside it, so the fields the owner
+    # sees are the fields the sighash covers.
+    if tx.is_token_transfer:
+        symbol, decimals = tx.token()
+        recipient, units = tx.token_transfer_fields()
+        op = ops.TokenTransfer(
+            amount_units=units, decimals=decimals, symbol=symbol,
+            destination=recipient, contract=tx.to, chain_id=tx.chain_id,
+            chain_name=tx.chain_name(), nonce=tx.nonce,
+            max_fee_wei=tx.max_fee_wei(), ticker=tx.ticker())
+    else:
+        op = ops.EthereumSpend(amount_wei=tx.value, destination=tx.to,
+                               chain_id=tx.chain_id, chain_name=tx.chain_name(),
+                               ticker=tx.ticker(),
+                               nonce=tx.nonce, max_fee_wei=tx.max_fee_wei())
     digest = tx.sighash()
     out: dict = {}
 

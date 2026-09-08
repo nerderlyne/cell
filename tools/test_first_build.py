@@ -136,6 +136,30 @@ def main() -> int:
           any(c["chain_id"] == 42161
               for c in json.loads((d / tool.ACCOUNTS).read_text())["chains"]))
 
+    # A token, which is the other thing BUILD.md section 12 tells a builder to
+    # register. It has to come AFTER the chain it lives on, and the ordering is
+    # a real constraint rather than a stylistic one -- register_token refuses a
+    # token on a chain the device cannot name.
+    USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+    r = run("token", "--dir", str(d), "--chain-id", "42161",
+            "--address", USDC, "--symbol", "USDC", "--decimals", "6")
+    check("provision.py token runs", r.returncode == 0, r.stderr[-200:])
+    check("...and reads the screen back to the builder",
+          "SEND USDC ON ARBITRUM ONE" in r.stdout)
+    check("...and says what the decimals mean, in units",
+          "250000000" in r.stdout)
+    check("...and the token survives in the record",
+          any(t["symbol"] == "USDC" and t["decimals"] == 6
+              for t in json.loads((d / tool.ACCOUNTS).read_text())["tokens"]))
+    r_bad = run("token", "--dir", str(d), "--chain-id", "999999",
+                "--address", USDC, "--symbol", "USDC", "--decimals", "6")
+    check("...and a token on an unregistered chain is refused",
+          r_bad.returncode != 0 and "Register the chain first" in r_bad.stdout)
+    r_re = run("token", "--dir", str(d), "--chain-id", "42161",
+               "--address", USDC, "--symbol", "USDC", "--decimals", "18")
+    check("...and its decimal point cannot be moved afterwards",
+          r_re.returncode != 0 and "refusing to relabel" in r_re.stdout)
+
     root = bip32.from_mnemonic(MNEMONIC)
     ms_path = wallet.multisig_account_path("multisig-p2wsh", 0, NETWORK)
     mine = [a for a in rec["accounts"] if a["script_type"] == "multisig-p2wsh"][0]
@@ -162,6 +186,76 @@ def main() -> int:
     check("...and an explicitly wrong one is refused by name",
           r_bad.returncode != 0 and "mainnet" in r_bad.stdout)
 
+    # ---- 2b. register a smart account, the way BUILD.md §12 writes it ----
+    #
+    # Driven as a subprocess for the same reason the commands above are: the
+    # defects this file has found were all in the seams between one command
+    # and the next against one directory, and none of them was reachable from
+    # a unit test. The EVM side had never been driven this way at all.
+    print("\n smart account")
+    r = run("show", "--dir", str(d))
+    evm = next((ln.split()[-1] for ln in r.stdout.splitlines()
+                if "ethereum address" in ln), "")
+    check("provision.py show prints the device's own EVM address",
+          evm.startswith("0x") and len(evm) == 42, evm)
+
+    IMPL = "0xD54cb65224410F3Ff97a8E72f363f224419f4FB0"
+    EXEC = "0x00000000a72A30AdBf38e14d36BCE2610ec3973F"
+    BOB = "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"
+    r = run("smart-account", "--dir", str(d), "--label", "treasury",
+            "--address", "0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC",
+            "--chain-ids", "1,8453", "--implementation", IMPL,
+            "--implementation-label", "Multisig v1",
+            "--threshold", "2", "--owners", f"{evm},{BOB}",
+            "--delay", "172800", "--executor", EXEC, "--fast-track")
+    check("provision.py smart-account registers across two chains",
+          r.returncode == 0, (r.stdout + r.stderr)[-260:])
+    check("...and states the timelock it will put on the screen",
+          "HELD 2d after relay" in r.stdout, r.stdout[-200:])
+
+    # The check the EVM side never had: a quorum this device is not in.
+    r_no = run("smart-account", "--dir", str(d), "--label", "notmine",
+               "--address", "0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC",
+               "--chain-ids", "1", "--implementation", IMPL,
+               "--threshold", "1", "--owners", BOB)
+    check("...and refuses an account this device is not an owner of",
+          r_no.returncode != 0 and "not among the owners" in r_no.stdout,
+          (r_no.stdout + r_no.stderr)[-200:])
+
+    # --delegated-eoa with no --address takes the device's own, which is the
+    # only address a 7702 authorisation from this device can ever delegate.
+    r_del = run("smart-account", "--dir", str(d), "--label", "mine",
+                "--chain-ids", "1", "--implementation", IMPL,
+                "--implementation-label", "Multisig v1",
+                "--owners", evm, "--delegated-eoa")
+    check("--delegated-eoa defaults to this device's own address",
+          r_del.returncode == 0 and evm in r_del.stdout,
+          (r_del.stdout + r_del.stderr)[-220:])
+
+    # verify-account against a dump that agrees, and one that does not.
+    good = work / "state-good.json"
+    good.write_text(json.dumps({
+        "owners": [evm, BOB], "threshold": 2, "delay": 172800,
+        "executor": EXEC, "forwardEnabled": True, "implementation": IMPL}))
+    r_v = run("verify-account", "--dir", str(d), "--label", "treasury",
+              "--state", str(good))
+    check("verify-account passes a dump that matches the record",
+          r_v.returncode == 0 and "DIFFER" not in r_v.stdout,
+          r_v.stdout[-260:])
+
+    bad = work / "state-bad.json"
+    bad.write_text(json.dumps({
+        "owners": [BOB], "threshold": 1, "delay": 0,
+        "executor": "0x" + "0" * 40, "forwardEnabled": False,
+        "implementation": IMPL}))
+    r_v2 = run("verify-account", "--dir", str(d), "--label", "treasury",
+               "--state", str(bad))
+    check("...and fails the 7702 init attack: owners swapped under the record",
+          r_v2.returncode != 0 and "is NOT an owner on chain" in r_v2.stdout,
+          r_v2.stdout[-300:])
+    check("...naming the timelock that is not there either",
+          "delay" in r_v2.stdout and "DIFFER" in r_v2.stdout)
+
     # ---- 3. boot the device the runbook just built ----------------------
     print("\n boot")
     dev = app.load_device(str(d), console=True)
@@ -170,12 +264,42 @@ def main() -> int:
           dev.network)
     check("...and the registered chain reached the signing module",
           42161 in __import__("eth").CHAINS)
+    check("...and the registered token with it",
+          __import__("eth").token_of(42161, USDC) == ("USDC", 6))
     check("...and the quorum came back with it", len(dev.prov.multisig) == 1)
 
     out = dev.show_address()
     addr = next((ln.strip() for ln in dev.display.last if ln.strip().startswith("tb1")), "")
     check("RECEIVE shows a testnet address", out == "address" and addr.startswith("tb1"),
           f"{out} {addr}")
+
+    # The export, from the record the runbook actually wrote rather than from
+    # a Provisioning this test built. A testnet device must declare testnet in
+    # every exported key, or a coordinator watches mainnet addresses that do
+    # not exist and shows the owner nothing.
+    import ur                                                  # noqa: E402
+    body = dev.prov.account_export()
+    item, rest = ur.cbor_decode(body)
+    check("the record can be exported as a crypto-account",
+          not rest and item.tag == ur.TAG_ACCOUNT
+          and item.value[1] == int.from_bytes(
+              dev.prov.master_fingerprint, "big"))
+    keys = []
+    # `desc`, not `d`: `d` is this test's provisioning directory, and rebinding
+    # it here left `tool.load(d)` further down dividing a CBOR tag by a string.
+    for desc in item.value[2]:
+        inner = desc.value
+        while isinstance(inner, ur.Tag):
+            inner = inner.value
+        keys.append(inner)
+    check("...with a descriptor for every Bitcoin account",
+          len(keys) == len([a for a in dev.prov.accounts
+                            if a.script_type in ur.SCRIPT_EXPRESSIONS]))
+    check("...every one of them declaring testnet",
+          all(k[5].value[2] == ur.NETWORK_TESTNET for k in keys))
+    check("...and it reassembles from its own UR frames",
+          ur.reassemble(ur.encode(body, "crypto-account",
+                                  max_fragment_len=80)) == body)
 
     # ---- 4. sign with it ------------------------------------------------
     print("\n signing")

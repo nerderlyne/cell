@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import re
 import sys
 
 import app
@@ -29,7 +30,9 @@ import bip32
 import ops
 import psbt as psbtmod
 import eth
+import link as lnk
 import qr
+import ur
 import wallet
 from buttons import BACK, CONFIRM, DOWN, UP, FakeButtons
 from camera import FakeCamera
@@ -52,6 +55,25 @@ def check(label: str, ok: bool) -> None:
 
 
 # --------------------------------------------------------------------------
+
+
+def flat(text: str) -> str:
+    """Every screen with the whitespace taken out.
+
+    `_fail` wraps a refusal at the panel width by slicing, not at word
+    boundaries, so "personal message" reaches the screen as "personal mess" +
+    "age". The owner reads it; a substring search of the raw lines does not.
+    """
+    return re.sub(r"\s+", "", text)
+
+
+def _renders(op) -> bool:
+    """True if the operation can be shown to the owner at all."""
+    try:
+        ops.render_for_display(op, reserve=ops.CONFIRM_FOOTER_ROWS)
+        return True
+    except ops.UnrenderableOperation:
+        return False
 
 
 def pin_presses(pin: str = PIN) -> list[str]:
@@ -83,7 +105,7 @@ class Recorder(ConsoleDisplay):
 
 
 def make_device(*, presses, frames, gate=None, policy=None, prov=None, se=None,
-                network="mainnet"):
+                network="mainnet", link=None):
     order: list[str] = []
 
     def default_gate(tier):
@@ -104,6 +126,7 @@ def make_device(*, presses, frames, gate=None, policy=None, prov=None, se=None,
                    # gives the output QR its frame time. The suite has no
                    # camera to give it to.
                    sleep=lambda _s: None,
+                   link=link,
                    clock=fake_buttons.now)
     return d, order
 
@@ -271,6 +294,103 @@ def main() -> int:
     raw = qr.decode(d6.display.frames)
     check("...and it is a typed EIP-1559 envelope", raw[0] == 0x02)
 
+    # ---- the smart-account paths, through the loop ----------------------
+    #
+    # These three exist as wallet functions that nothing on the device could
+    # reach: classify() knew "psbt" and "cell-eth-tx" and nothing else, so on
+    # hardware there was no way to spend from a smart account, cancel a queued
+    # transaction, or delegate. Every check below goes through run_once, which
+    # is the only thing that proves the flow and not just the library.
+    print("\n smart accounts")
+    import eip712
+    se_sa = SoftSE(pin=PIN)
+    prov_sa = wallet.provision(MNEMONIC, se_sa, PIN, script_types=("p2wpkh",))
+    eip712.ACCOUNTS.clear()
+    me = prov_sa.eth_address()
+    EXEC = "0x00000000a72A30AdBf38e14d36BCE2610ec3973F"
+    IMPL = "0xD54cb65224410F3Ff97a8E72f363f224419f4FB0"
+    prov_sa.register_smart_account(eip712.SmartAccount(
+        label="treasury", address="0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC",
+        chain_ids=(1, 8453), implementation=IMPL,
+        implementation_label="Multisig v1", threshold=2,
+        owners=(me, "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"),
+        delay_seconds=172800, executor=EXEC, fast_track=True))
+
+    def sa_device(doc, presses=None):
+        return make_device(
+            presses=presses or ([CONFIRM, CONFIRM] + pin_presses()
+                                + [CONFIRM, CONFIRM]),
+            frames=qr.encode(json.dumps(doc).encode()),
+            se=se_sa, prov=prov_sa)
+
+    d_sa, _ = sa_device({"type": "cell-account-execute", "account": "treasury",
+                         "to": "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+                         "value": 10**17, "nonce": 4, "chain_id": 1})
+    check("a smart-account spend signs through the loop",
+          d_sa.run_once() == "signed-account-execute")
+    t_sa = d_sa.display.text()
+    check("the account is named on the screen", "SEND FROM TREASURY" in t_sa)
+    check("the timelock is stated", "HELD 2d after relay" in t_sa)
+    check("so is the unanimous fast track", "all 2 owners sign" in t_sa)
+    check("the relayer, not the account, pays", "paid by whoever relays" in t_sa)
+    env = json.loads(qr.decode(d_sa.display.frames))
+    check("the emitted envelope is typed", env["type"] == "cell-signature")
+    check("...names the request it answers",
+          env["for"] == "cell-account-execute")
+    check("...carries a 65-byte signature",
+          len(bytes.fromhex(env["signature"][2:])) == 65)
+    check("...and the digest the account will check",
+          env["digest"] == "0x" + eip712.account("treasury").spend_digest(
+              "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed", 10**17, 4, 1).hex())
+    check("...recovering to this device's own address",
+          env["signer"].lower() == me.lower())
+
+    d_c, order_c = sa_device({"type": "cell-account-cancel",
+                              "account": "treasury", "tx_hash": "0x" + "ab" * 32,
+                              "nonce": 5, "chain_id": 8453})
+    check("a cancel signs through the loop",
+          d_c.run_once() == "signed-account-cancel")
+    t_c = d_c.display.text()
+    check("the cancel names what it stops", "CANCEL A QUEUED TRANSACTION" in t_c)
+    check("the queued hash is shown in full",
+          ("ab" * 32) in t_c.replace("\n", "").replace(" ", ""))
+    check("the second chain is named", "Base" in t_c)
+    # The stop button must not cost a lancet. See ops.CancelQueued.
+    check("cancelling ran at touch, not blood", "gate:TOUCH" in order_c)
+
+    # A delegation is of THIS device's key, so it needs a record at this
+    # device's own address. The treasury above is a contract account the
+    # device merely co-owns, and delegating it would delegate the device.
+    prov_sa.register_smart_account(eip712.SmartAccount(
+        label="mine", address=me, chain_ids=(1,), implementation=IMPL,
+        implementation_label="Multisig v1", threshold=1, owners=(me,),
+        delegated_eoa=True))
+    d_d, order_d = sa_device({"type": "cell-delegate", "account": "mine",
+                              "nonce": 0, "chain_id": 1})
+    check("a delegation signs through the loop",
+          d_d.run_once() == "signed-delegation")
+    t_d = d_d.display.text()
+    check("the delegation screen names the code, not the account",
+          "Multisig v1" in t_d)
+    check("...and says the change persists", "delegated again" in t_d)
+    check("a delegation costs blood, through the loop", "gate:BLOOD" in order_d)
+
+    d_x, order_x = sa_device({"type": "cell-account-execute",
+                              "account": "treasury",
+                              "to": "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+                              "value": 1, "nonce": 4, "chain_id": 11155111},
+                             presses=[CONFIRM] * 4)
+    check("a chain the account is not registered on is refused",
+          d_x.run_once() == "refused")
+    check("...before the gate", order_x == [])
+
+    d_y, order_y = sa_device({"type": "cell-delegate", "account": "treasury",
+                              "nonce": 0, "chain_id": 1},
+                             presses=[CONFIRM] * 4)
+    check("delegating a co-owned contract account is refused",
+          d_y.run_once() == "refused")
+    check("...before the gate", order_y == [])
+
     # ---- multisig through the loop --------------------------------------
     print("\n multisig")
     se7 = SoftSE(pin=PIN)
@@ -283,6 +403,47 @@ def main() -> int:
     check("a registered quorum signs", d7.run_once() == "signed-psbt")
     check("the quorum is on the confirmation screen",
           "MULTISIG 2 of 3" in d7.display.text())
+
+    # RECEIVE has to show where a quorum's funds actually live. Showing only
+    # the single-sig address was a trap for exactly the owners who did the
+    # harder thing: money sent there is spendable by this device alone, which
+    # is the property multisig exists to remove.
+    d7b, _ = make_device(presses=[CONFIRM], frames=[], se=se7, prov=prov7)
+    check("RECEIVE shows the quorum's address, not just the single-sig one",
+          d7b.show_address() == "address"
+          and any("2 of 3" in ln for ln in d7b.display.last))
+    check("...and the single-sig address is still there",
+          any("single-sig" in ln for ln in d7b.display.last))
+
+    # display.show refuses a screen that does not fit rather than truncating
+    # it, so an unbounded list here is a crash on the RECEIVE button.
+    se7c = SoftSE(pin=PIN)
+    prov7c = wallet.provision(MNEMONIC, se7c, PIN)
+    import bip39 as _bip39
+    ms_path = wallet.multisig_account_path("multisig-p2wsh", 0, "mainnet")
+    _mine = prov7c.account_for("multisig-p2wsh", "mainnet")
+    me_cos = wallet.CoSigner(label="me",
+                             fingerprint=prov7c.master_fingerprint.hex(),
+                             path=_mine.path, xpub=_mine.xpub)
+
+    def _other(tag):
+        o = bip32.from_mnemonic(_bip39.entropy_to_mnemonic(bytes([tag]) * 32))
+        return wallet.CoSigner(label=f"c{tag}", fingerprint=o.fingerprint().hex(),
+                               path=ms_path,
+                               xpub=o.derive(ms_path).neutered().serialize("xpub"))
+
+    for i in range(5):
+        prov7c.register_multisig(wallet.Multisig(
+            label=f"q{i}", threshold=2,
+            cosigners=[me_cos, _other(1 + i), _other(200 + i)],
+            network="mainnet"))
+    d7c, _ = make_device(presses=[CONFIRM], frames=[], se=se7c, prov=prov7c)
+    check("five quorums do not overflow the RECEIVE screen",
+          d7c.show_address() == "address")
+    check("...it fits the panel exactly",
+          len(d7c.display.last) <= app.ops.DISPLAY_ROWS)
+    check("...and says how many it could not show",
+          any("more quorum(s) not shown" in ln for ln in d7c.display.last))
 
     se8 = SoftSE(pin=PIN)
     prov8 = wallet.provision(MNEMONIC, se8, PIN)
@@ -321,10 +482,64 @@ def main() -> int:
     check("...and it is the address this seed derives", want in addr_text)
     check("...without unlocking anything", order11 == [])
 
-    d12, _ = make_device(presses=[DOWN, CONFIRM], frames=[])
+    d12, order12 = make_device(presses=[DOWN, BACK], frames=[])
     check("DOWN shows the device's public identity", d12.run_once() == "keys")
     check("...including the fingerprint",
           d12.prov.master_fingerprint.hex() in d12.display.text())
+    check("...without unlocking anything either", order12 == [])
+
+    # Exporting the watch-only accounts, which is the other thing that screen
+    # offers. It signs nothing and needs no seed, and it is behind a second
+    # CONFIRM because an account xpub reveals every address the wallet will
+    # ever use.
+    d13, order13 = make_device(presses=[DOWN, CONFIRM, CONFIRM, CONFIRM],
+                               frames=[])
+    check("CONFIRM on that screen exports the accounts",
+          d13.run_once() == "exported-accounts")
+    check("...warning what an xpub reveals, before showing it",
+          "everyaddressyouwilleveruse" in flat(d13.display.text()))
+    check("...as a crypto-account UR a coordinator recognises",
+          bool(d13.display.frames)
+          and all(f.startswith("ur:crypto-account/")
+                  for f in d13.display.frames))
+    check("...and nothing was unlocked to build it", order13 == [])
+
+    _acct = ur.reassemble(d13.display.frames)
+    _item, _rest = ur.cbor_decode(_acct)
+    check("the export is tag 311 naming this device's fingerprint",
+          not _rest and _item.tag == ur.TAG_ACCOUNT
+          and _item.value[1] == int.from_bytes(
+              d13.prov.master_fingerprint, "big"))
+    check("...with one descriptor per Bitcoin script type",
+          len(_item.value[2]) == len([a for a in d13.prov.accounts
+                                      if a.script_type
+                                      in ur.SCRIPT_EXPRESSIONS]))
+    check("...and the eth account is not among them, having no script",
+          any(a.script_type == "eth" for a in d13.prov.accounts)
+          and not any(a.script_type == "eth"
+                      for a in d13.prov.accounts
+                      if a.script_type in ur.SCRIPT_EXPRESSIONS))
+    # Every exported key must be the one the recorded xpub holds, and public.
+    _keys = []
+    for _d in _item.value[2]:
+        _inner = _d.value
+        while isinstance(_inner, ur.Tag):
+            _inner = _inner.value
+        _keys.append(_inner)
+    check("every exported key is a compressed public key",
+          all(len(k[3]) == 33 and k[3][0] in (2, 3) for k in _keys))
+    check("...and none of them claims to be private",
+          all(2 not in k for k in _keys))
+    _want = {bip32.ExtendedKey.deserialize(a.xpub).pubkey
+             for a in d13.prov.accounts
+             if a.script_type in ur.SCRIPT_EXPRESSIONS}
+    check("...and each is an account key this device actually recorded",
+          {k[3] for k in _keys} == _want)
+
+    # BACK at the warning shows nothing at all.
+    d14, _ = make_device(presses=[DOWN, CONFIRM, BACK, CONFIRM], frames=[])
+    check("BACK at the warning shows no QR",
+          d14.run_once() == "export-cancelled" and not d14.display.frames)
 
 
     # ---- the seam to the sensing half -----------------------------------
@@ -512,6 +727,274 @@ def main() -> int:
     check("an Ethereum fee cap is priced too, as the screen's MOST line is",
           _policy.decide(_pol, _eth.op_class(),
                          _eth.amount_for_policy()).tier_to_run is _T2.BLOOD)
+
+    # ---- the other framing, through the whole loop -----------------------
+    #
+    # The point is that nothing above camera.py knows which dialect arrived.
+    # A UR request must be signed identically and answered in UR, because a
+    # coordinator that speaks one framing need not speak the other.
+    print("\n UR, end to end")
+    ur_blob = build_psbt(root, "p2wpkh")
+    d, _ = make_device(presses=[CONFIRM] + [CONFIRM] + pin_presses()
+                       + [CONFIRM, CONFIRM],
+                       frames=ur.encode(ur_blob, "crypto-psbt",
+                                        max_fragment_len=200))
+    check("a PSBT arriving as UR is signed", d.run_once() == "signed-psbt")
+    check("the reply came back as UR, not pNofM",
+          all(f.startswith("ur:crypto-psbt/") for f in d.display.frames))
+    signed = ur.reassemble(d.display.frames)
+    check("the UR reply is a signed PSBT",
+          signed.startswith(psbtmod.PSBT_MAGIC)
+          and any(k[:1] == bytes([psbtmod.IN_PARTIAL_SIG])
+                  for k in psbtmod.PSBT.parse(signed).inputs[0]))
+    check("...carrying the attestation, exactly as the QR path does",
+          psbtmod.PSBT.parse(signed).get_proprietary(b"CELL", 1) is not None)
+    check("the destination was still shown in full",
+          "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
+          in d.display.text().replace("\n", "").replace(" ", ""))
+
+    # A pNofM request still comes back pNofM. Mirroring has to work both ways
+    # or it is just a second default.
+    d, _ = make_device(presses=[CONFIRM] + [CONFIRM] + pin_presses()
+                       + [CONFIRM, CONFIRM],
+                       frames=qr.encode(build_psbt(root, "p2wpkh")))
+    d.run_once()
+    check("a pNofM request is answered in pNofM",
+          all(f.startswith("p") and not f.startswith("ur:")
+              for f in d.display.frames))
+
+    # ---- ERC-20, end to end ---------------------------------------------
+    #
+    # The one operation that carries calldata. What matters here is that the
+    # screen names the token, shows BOTH addresses in full, and that an
+    # unregistered token never reaches a PIN prompt.
+    print("\n an ERC-20 transfer")
+    USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+    PAYEE = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+    eth.register_token(1, USDC, "USDC", 6)
+
+    def token_req(**over):
+        doc = {"type": "cell-token-tx", "chain_id": 1, "nonce": 3,
+               "max_priority_fee_per_gas": 1_000_000_000,
+               "max_fee_per_gas": 30_000_000_000, "gas_limit": 65_000,
+               "token": USDC, "to": PAYEE, "amount": 250_000_000}
+        doc.update(over)
+        return json.dumps(doc).encode()
+
+    d, order = make_device(presses=[CONFIRM] + [CONFIRM] + pin_presses()
+                           + [CONFIRM, CONFIRM],
+                           frames=qr.encode(token_req()))
+    outcome = d.run_once()
+    check("a registered token transfer is signed", outcome == "signed-token")
+    text = d.display.text()
+    tight = flat(text)
+    check("the screen named the token, not a selector",
+          "SEND USDC ON ETHEREUM" in text)
+    check("the amount was shown at the registered decimals",
+          "250 USDC" in text)
+    check("the recipient was shown in full", PAYEE in tight)
+    check("the token contract was shown in full too", USDC in tight)
+    check("the fee was denominated in the chain's own coin",
+          "max fee  0.00195 ETH" in text)
+    check("no calldata was ever put on the screen",
+          "a9059cbb" not in tight)
+    check("the raw transaction was emitted", len(d.display.frames) > 0)
+    raw = qr.decode(d.display.frames)
+    check("...as a type-2 transaction carrying the transfer",
+          raw[:1] == bytes([eth.TX_TYPE_1559])
+          and eth.rlp_decode(raw[1:])[7]
+          == eth.encode_erc20_transfer(PAYEE, 250_000_000))
+
+    # An unregistered token has to be refused BEFORE the owner spends a PIN
+    # attempt on it, which is the whole reason the registry is consulted at
+    # parse time rather than at signing time.
+    d, order = make_device(presses=[CONFIRM, CONFIRM, CONFIRM],
+                           frames=qr.encode(token_req(
+                               token="0x1111111111111111111111111111111111111111")))
+    check("an unregistered token is refused", d.run_once() == "refused")
+    check("...before the gate ran", not order)
+    # Flattened: _fail wraps at the panel width, so the command name is split
+    # across two rows on screen. The owner reads it fine; a substring search
+    # of the raw lines does not.
+    check("...and the refusal says how to fix it",
+          "provision.pytoken" in d.display.text().replace("\n", "")
+          .replace(" ", ""))
+
+    d, order = make_device(presses=[CONFIRM, CONFIRM, CONFIRM],
+                           frames=qr.encode(token_req(data="0xdeadbeef")))
+    check("a token request carrying calldata is refused",
+          d.run_once() == "refused")
+    check("...naming the field it would not accept",
+          "data" in d.display.text())
+
+    # The tier. A token amount cannot be compared against a native-unit floor,
+    # so it must never be priced BELOW one.
+    _tok = ops.TokenTransfer(
+        amount_units=250_000_000, decimals=6, symbol="USDC",
+        destination=PAYEE, contract=USDC, chain_id=1, chain_name="Ethereum",
+        nonce=0, max_fee_wei=1_000, ticker="ETH")
+    check("a token transfer is never priced below an amount floor",
+          _policy.decide(_pol, _tok.op_class(),
+                         _tok.amount_for_policy()).tier_to_run is _T2.BLOOD)
+    check("...and an owner with no floor can still lock the class",
+          _policy.decide(Policy(blood_locked=frozenset({"tx.token"})),
+                         _tok.op_class(),
+                         _tok.amount_for_policy()).tier_to_run is _T2.BLOOD)
+    check("a token sent to its own contract is unrenderable",
+          not _renders(ops.TokenTransfer(
+              amount_units=1, decimals=6, symbol="USDC", destination=USDC,
+              contract=USDC, chain_id=1, chain_name="Ethereum", nonce=0,
+              max_fee_wei=1, ticker="ETH")))
+
+    # ---- EIP-4527, which is what a browser wallet sends -------------------
+    #
+    # The transaction arrives ENCODED rather than as fields, so the checks that
+    # matter are that the device rebuilds it, re-encodes it, and refuses if the
+    # two differ by a byte -- and that the blind-signing data types are refused
+    # by name rather than silently.
+    print("\n an EIP-4527 request")
+    RID = bytes(range(16))
+    MY_ADDR = None
+
+    def sign_request(**over):
+        tx = eth.EthTransaction(
+            chain_id=over.pop("chain_id", 1), nonce=4,
+            max_priority_fee_per_gas=1_000_000_000,
+            max_fee_per_gas=30_000_000_000, gas_limit=21_000,
+            to="0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+            value=over.pop("value", 10**17))
+        kw = {"request_id": RID, "sign_data": tx.signing_payload(),
+              "data_type": 2, "path": wallet.eth_path(0, 0), "chain_id": 1}
+        kw.update(over)
+        return ur.encode(ur.encode_eth_sign_request(**kw), "eth-sign-request",
+                         max_fragment_len=120)
+
+    d, order = make_device(presses=[CONFIRM] + [CONFIRM] + pin_presses()
+                           + [CONFIRM, CONFIRM],
+                           frames=sign_request())
+    outcome = d.run_once()
+    check("an EIP-4527 request is signed", outcome == "signed-eth-request")
+    text = d.display.text()
+    check("the amount was rendered from the rebuilt transaction",
+          "0.1 ETH" in text)
+    check("the chain was named, not numbered alone", "ETHEREUM" in text)
+    check("the destination was shown in full",
+          "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+          in text.replace("\n", "").replace(" ", ""))
+    check("the reply is an eth-signature, not another request",
+          bool(d.display.frames)
+          and all(f.startswith("ur:eth-signature/") for f in d.display.frames))
+    sig_cbor = ur.reassemble(d.display.frames)
+    item, rest = ur.cbor_decode(sig_cbor)
+    check("...tagged 402 as the format says",
+          not rest and isinstance(item, ur.Tag)
+          and item.tag == ur.TAG_ETH_SIGNATURE)
+    body = item.value
+    check("...echoing the request id so a companion can match it",
+          body[1].value == RID)
+    check("...carrying 65 bytes of r, s and v",
+          isinstance(body[2], bytes) and len(body[2]) == 65
+          and body[2][64] in (0, 1))
+
+    # The signature has to recover to this device's own address, or the
+    # companion assembles a transaction credited to nobody.
+    _tx = eth.from_signing_payload(
+        ur.decode_eth_sign_request(
+            ur.decode(sign_request()))["sign_data"])
+    _r = int.from_bytes(body[2][:32], "big")
+    _s = int.from_bytes(body[2][32:64], "big")
+    check("the signature recovers to this device's address",
+          eth.sender(_tx, _r, _s, body[2][64]) == d.prov.eth_address())
+
+    # The blind-signing data types, each refused by name.
+    for dtype, needle in ((3, "personal message"), (4, "EIP-712 typed data"),
+                          (1, "legacy transaction")):
+        d, order = make_device(presses=[CONFIRM, CONFIRM, CONFIRM],
+                               frames=sign_request(data_type=dtype))
+        got = d.run_once()
+        check(f"data type {dtype} is refused", got == "refused")
+        check(f"...and named as {needle}", flat(needle) in flat(d.display.text()))
+        check(f"...before the gate ran", not order)
+
+    # A payload that decodes to the same fields but is not the same bytes. RLP
+    # has non-canonical spellings, and a device that signed one would display a
+    # correct summary over a digest it had not reproduced.
+    _canon = eth.EthTransaction(
+        chain_id=1, nonce=4, max_priority_fee_per_gas=1_000_000_000,
+        max_fee_per_gas=30_000_000_000, gas_limit=21_000,
+        to="0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", value=10**17)
+    _fields = eth.rlp_decode(_canon.signing_payload()[1:])
+    _fields[1] = b"\x00\x04"                    # a leading zero on the nonce
+    _noncanon = bytes([eth.TX_TYPE_1559]) + eth.rlp_encode(_fields)
+    d, order = make_device(presses=[CONFIRM, CONFIRM, CONFIRM],
+                           frames=sign_request(sign_data=_noncanon))
+    check("a payload that does not re-encode to itself is refused",
+          d.run_once() == "refused")
+    check("...saying the two differ", "byteforbyte" in flat(d.display.text()))
+    check("...before the gate ran", not order)
+
+    # A request aimed at somebody else's key.
+    d, order = make_device(presses=[CONFIRM, CONFIRM, CONFIRM],
+                           frames=sign_request(path="m/44h/60h/9h/0/0"))
+    check("a request for another derivation path is refused",
+          d.run_once() == "refused")
+    check("...naming both paths",
+          "m/44h/60h/9h/0/0" in flat(d.display.text())
+          and "m/44h/60h/0h/0/0" in flat(d.display.text()))
+    d, order = make_device(presses=[CONFIRM, CONFIRM, CONFIRM],
+                           frames=sign_request(address=bytes(range(20))))
+    check("a request naming another address is refused",
+          d.run_once() == "refused")
+    check("...and says whose device this is",
+          d.prov.eth_address() in flat(d.display.text()))
+
+    # The outer chain id is a caption; the inner one is signed.
+    d, order = make_device(presses=[CONFIRM, CONFIRM, CONFIRM],
+                           frames=sign_request(chain_id=8453))
+    check("a chain id disagreeing with the payload is refused",
+          d.run_once() == "refused")
+    check("...saying which one is signed",
+          "Onlythesecond" in flat(d.display.text()))
+
+    # ---- the USB build variant ------------------------------------------
+    #
+    # Same loop, same gate, same screens; a wire instead of a lens. What is
+    # checked is that nothing about the authorisation changed and that the
+    # reply goes back out the way it came in rather than onto a screen nobody
+    # is pointing a camera at.
+    print("\n the USB link variant")
+    wire_blob = build_psbt(root, "p2wpkh")
+    port = lnk.FakePort(lnk.encode_message(wire_blob))
+    d, order = make_device(presses=[CONFIRM] + [CONFIRM] + pin_presses()
+                           + [CONFIRM, CONFIRM],
+                           frames=[], link=lnk.Link(port))
+    check("a PSBT arriving over the wire is signed",
+          d.run_once() == "signed-psbt")
+    check("the waiting screen names the cable, not the camera",
+          "over the cable" in d.display.text()
+          and "front of the camera" not in d.display.text())
+    check("the gate still ran", any(o.startswith("gate:") for o in order))
+    check("the destination was still shown in full",
+          "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
+          in d.display.text().replace("\n", "").replace(" ", ""))
+    check("nothing was put on screen as a QR", not d.display.frames)
+    # FakePort records only writes -- the request came from its script -- so
+    # everything here is the device's reply.
+    got = lnk.Link(lnk.FakePort(bytes(port.written))).receive().payload
+    check("the reply went back down the wire",
+          got.startswith(psbtmod.PSBT_MAGIC)
+          and any(k[:1] == bytes([psbtmod.IN_PARTIAL_SIG])
+                  for k in psbtmod.PSBT.parse(got).inputs[0]))
+
+    # A link build with nothing on the wire must go back to idle, not hang.
+    d, order = make_device(presses=[CONFIRM, CONFIRM],
+                           frames=[], link=lnk.Link(lnk.FakePort(b"")))
+    d.link.receive = lambda **kw: (_ for _ in ()).throw(
+        lnk.LinkError("no message from the companion in 180s"))
+    check("silence on the wire is a screen, not a hang",
+          d.run_once() == "scan-failed")
+    check("...and it says what happened",
+          "companion" in d.display.text())
 
     # ---- every screen fits the panel ------------------------------------
     print("\n every screen fits")

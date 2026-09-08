@@ -1,10 +1,11 @@
 """The camera, and the only way data gets into this device.
 
-There is no wifi, no bluetooth and no USB data path, so everything the device
-learns about the outside world arrives as pixels through a lens. That makes
-this file the entire attack surface for input, and it is written accordingly:
-it decodes QR codes and hands the bytes to `qr.Collector`, which is where the
-paranoia about substituted frames lives.
+There is no wifi and no bluetooth, and on the shipped build no USB data path
+either, so everything the device learns about the outside world arrives as
+pixels through a lens. That makes this file the whole input attack surface, and
+it is written accordingly: it decodes QR codes and hands the bytes to
+`qr.Collector`, where the paranoia about substituted frames lives. (`link.py`
+is the other input surface, on the one build that has it.)
 
 TWO CAMERAS, ONE CSI PORT. The Pi Zero has a single CSI connector and the
 speckle path owns it — that camera has its lens removed and its exposure,
@@ -19,6 +20,14 @@ Every judgement about those bytes — is it a PSBT, is it ours, does it pay who
 it says — happens above, against the device's own keys. A camera that could
 be made to lie is assumed; the design's answer is that nothing downstream
 believes it.
+
+TWO FRAMINGS, AND WHY THE DEVICE DOES NOT CHOOSE. A transfer arrives either as
+`qr.py`'s `pNofM` frames or as `ur.py`'s UR parts, and which one it is depends
+entirely on the coordinator the owner already uses: Specter speaks pNofM,
+Keystone-compatible tooling speaks UR, Sparrow speaks both. So `scan` accepts
+either, decided by the first frame it can parse and then locked for the rest of
+the transfer, and `emit` REPLIES IN THE FRAMING IT WAS ASKED IN. A coordinator
+that could talk to this device cannot then fail to read its answer.
 """
 
 from __future__ import annotations
@@ -28,6 +37,19 @@ from dataclasses import dataclass, field
 from typing import Callable, Protocol, runtime_checkable
 
 import qr
+import ur
+
+# What either collector raises for a frame that does not belong to the
+# transfer. `scan` steps over these and keeps going: the owner may simply have
+# panned across another screen, and taking the loop down for that would make a
+# busy desk unusable.
+FramingError = (qr.BadFrame, ur.BadUR)
+
+PNOFM, UR = "pNofM", "ur"
+# A third value that never comes off a camera: the USB build's wire. It lives
+# beside the other two because `Transfer` is what the loop dispatches on, and a
+# reply has to know which route to go back out by. See link.py.
+LINK = "link"
 
 # How long to keep the camera running before giving up on a transfer. Long
 # enough for an animated loop of a few dozen frames to come round twice.
@@ -110,10 +132,85 @@ class ScanCancelled(Exception):
     """The owner pressed BACK during a scan. Not a failure, a decision."""
 
 
+@dataclass(frozen=True)
+class Transfer:
+    """One complete transfer, and how it was framed.
+
+    The framing travels with the payload for one reason: the reply has to use
+    it. Everything else about this object is deliberately inert — nothing
+    downstream may treat `ur_type` as a claim about what the bytes are. A
+    `crypto-psbt` label on a payload that is not a PSBT is caught by
+    `app.classify` reading the bytes, exactly as it would be without a label.
+    """
+
+    payload: bytes
+    framing: str = PNOFM
+    ur_type: str | None = None
+
+
+@dataclass
+class EitherCollector:
+    """Collects a transfer in whichever framing turns up first.
+
+    The first frame that parses picks the framing, and it is then locked: a UR
+    part arriving mid-`pNofM` transfer is refused rather than starting a second
+    collection alongside the first. Both underlying collectors already refuse a
+    chunk replaced mid-scan, and locking the framing closes the same hole one
+    level up — otherwise a second screen could restart the transfer in the
+    other dialect and be reassembled independently.
+    """
+
+    framing: str | None = None
+    _qr: qr.Collector = field(default_factory=qr.Collector)
+    _ur: ur.Collector = field(default_factory=ur.Collector)
+
+    def feed(self, frame: str) -> Transfer | None:
+        wants = UR if ur.is_ur(frame) else PNOFM
+        if self.framing is None:
+            self.framing = wants
+        elif wants != self.framing:
+            raise qr.BadFrame(
+                f"a {wants} frame arrived during a {self.framing} transfer. "
+                f"Two different transfers are on screen; restart the scan.")
+        if self.framing == UR:
+            payload = self._ur.feed(frame)
+            if payload is None:
+                return None
+            return Transfer(payload, UR, self._ur.ur_type)
+        payload = self._qr.feed(frame)
+        if payload is None:
+            return None
+        return Transfer(payload, PNOFM)
+
+    @property
+    def missing(self) -> list[int]:
+        return self._ur.missing if self.framing == UR else self._qr.missing
+
+    def progress(self) -> str:
+        if self.framing is None:
+            return "waiting for the first frame"
+        return (self._ur.progress() if self.framing == UR
+                else self._qr.progress())
+
+
 def scan(camera: Camera, display=None, timeout_s: float = SCAN_TIMEOUT_S,
          clock: Callable[[], float] = time.monotonic,
          on_progress: Callable[[str], None] | None = None,
          buttons=None) -> bytes:
+    """Collect one complete transfer and return its bytes.
+
+    Kept for the callers that only want the payload. `scan_transfer` is the
+    same scan with the framing attached, which is what the signing flows use
+    so the reply goes back in the dialect it arrived in.
+    """
+    return scan_transfer(camera, display, timeout_s, clock, on_progress,
+                         buttons).payload
+
+
+def scan_transfer(camera: Camera, display=None, timeout_s: float = SCAN_TIMEOUT_S,
+                  clock: Callable[[], float] = time.monotonic,
+                  on_progress: Callable[[str], None] | None = None,
+                  buttons=None) -> Transfer:
     """Collect one complete transfer, or raise.
 
     Progress is reported because an animated transfer that is missing one
@@ -125,7 +222,7 @@ def scan(camera: Camera, display=None, timeout_s: float = SCAN_TIMEOUT_S,
     `buttons` was passed nothing polled one: the only way out of a scan that
     was not going to complete was the power switch.
     """
-    collector = qr.Collector()
+    collector = EitherCollector()
     deadline = clock() + timeout_s
     for frame in camera.frames():
         if clock() > deadline:
@@ -140,8 +237,8 @@ def scan(camera: Camera, display=None, timeout_s: float = SCAN_TIMEOUT_S,
         if frame is None:
             continue                    # a read that carried no code
         try:
-            payload = collector.feed(frame)
-        except qr.BadFrame as e:
+            transfer = collector.feed(frame)
+        except FramingError as e:
             # A frame from a different transfer, or one that changed under us.
             # Report it and keep scanning — the owner may simply have panned
             # across another screen.
@@ -153,26 +250,46 @@ def scan(camera: Camera, display=None, timeout_s: float = SCAN_TIMEOUT_S,
         if display is not None:
             display.show(["SCANNING", "", f"  {collector.progress()}", "",
                           "  BACK to stop"])
-        if payload is not None:
-            return payload
+        if transfer is not None:
+            return transfer
     raise CameraError(f"the camera ran out of frames with {collector.progress()}")
 
 
 def emit(display, payload: bytes, caption: str = "", loops: int = 3,
          chunk: int = qr.DEFAULT_CHUNK,
          sleep: Callable[[float], None] = time.sleep,
-         frame_s: float = 0.4) -> int:
+         frame_s: float = 0.4, framing: str = PNOFM,
+         ur_type: str | None = None) -> int:
     """Show a payload as an animated QR loop. Returns the frame count.
 
     It loops rather than showing each frame once, because the reader on the
     other side will miss frames and there is no back channel to ask again.
+
+    THE TWO FRAMINGS LOOP DIFFERENTLY, and that is the point of offering UR at
+    all. A `pNofM` loop repeats the same fixed frames, so a reader that keeps
+    missing frame four never finishes. A UR loop's second pass is not a repeat:
+    past the pure fragments the encoder emits XOR mixtures, and a reader
+    missing one fragment recovers it from a mixture of others. Same wall-clock,
+    same screen, and a transfer that converges instead of stalling.
     """
-    frames = qr.encode(payload, chunk=chunk)
-    for _ in range(loops):
-        for i, f in enumerate(frames, 1):
-            display.show_qr(f, caption or f"{i} of {len(frames)}  ·  "
-                                          f"{qr.digest(payload)}")
-            sleep(frame_s)
+    if framing not in (PNOFM, UR):
+        raise CameraError(f"unknown framing {framing!r}")
+    if framing == PNOFM:
+        frames = qr.encode(payload, chunk=chunk)
+        shown = [f for _ in range(loops) for f in frames]
+    else:
+        pure = ur.encode(payload, ur_type or "bytes", max_fragment_len=chunk)
+        # A payload small enough for one part is a still image, and a still
+        # image is the easiest thing a cheap webcam ever has to read. Repeat
+        # it rather than turning it into a fountain of one.
+        shown = pure * loops if len(pure) == 1 else ur.encode(
+            payload, ur_type or "bytes", max_fragment_len=chunk,
+            parts=len(pure) * loops)
+        frames = pure
+    for i, f in enumerate(shown, 1):
+        display.show_qr(f, caption or f"{i} of {len(shown)}  ·  "
+                                      f"{qr.digest(payload)}")
+        sleep(frame_s)
     return len(frames)
 
 
@@ -258,6 +375,60 @@ def _selftest() -> int:
     emit(d3, payload, loops=1, chunk=64, sleep=lambda _s: None)
     checks.append(("emit then scan round trips",
                    scan(FakeCamera(d3.frames)) == payload))
+
+    # ---- the other framing, through exactly the same scan ----
+
+    ur_frames = ur.encode(payload, "crypto-psbt", max_fragment_len=100)
+    got = scan_transfer(FakeCamera(ur_frames))
+    checks.append(("collects a UR transfer without being told",
+                   got.payload == payload))
+    checks.append(("...and reports the framing back",
+                   got.framing == UR and got.ur_type == "crypto-psbt"))
+    checks.append(("a pNofM transfer reports its framing too",
+                   scan_transfer(FakeCamera(frames)).framing == PNOFM))
+    checks.append(("collects a UR transfer out of order",
+                   scan(FakeCamera(list(reversed(ur_frames)))) == payload))
+
+    # The reason UR is here: a frame the camera never manages to read.
+    dropped = [f for f in ur_frames if not f.startswith("ur:crypto-psbt/2-")]
+    more = ur.encode(payload, "crypto-psbt", max_fragment_len=100,
+                     parts=len(ur_frames) * 3)[len(ur_frames):]
+    checks.append(("a UR transfer survives a frame that is never read",
+                   scan(FakeCamera(dropped + more)) == payload))
+    try:
+        scan(FakeCamera([f for f in frames if not f.startswith("p2of")] * 3))
+        checks.append(("...where pNofM cannot, however long it loops", False))
+    except CameraError:
+        checks.append(("...where pNofM cannot, however long it loops", True))
+
+    # Junk, and the other dialect, both stepped over rather than fatal.
+    checks.append(("ignores UR frames during a pNofM transfer",
+                   scan(FakeCamera([frames[0], ur_frames[0]] + frames[1:]))
+                   == payload))
+    checks.append(("ignores pNofM frames during a UR transfer",
+                   scan(FakeCamera([ur_frames[0], frames[0]] + ur_frames[1:]))
+                   == payload))
+
+    d4 = ConsoleDisplay(out=open("/dev/null", "w"))
+    n = emit(d4, payload, loops=3, chunk=100, sleep=lambda _s: None,
+             framing=UR, ur_type="crypto-psbt")
+    checks.append(("a UR loop's later passes are not repeats",
+                   len(d4.frames) == n * 3 and len(set(d4.frames)) == n * 3))
+    checks.append(("...and the first pass alone reassembles",
+                   scan(FakeCamera(d4.frames[:n])) == payload))
+    checks.append(("...as does any sufficient subset",
+                   scan(FakeCamera(d4.frames[2:])) == payload))
+
+    d5 = ConsoleDisplay(out=open("/dev/null", "w"))
+    emit(d5, b"short", loops=2, sleep=lambda _s: None, framing=UR)
+    checks.append(("a small UR payload stays a still image",
+                   len(set(d5.frames)) == 1 and "-" not in d5.frames[0][3:12]))
+
+    try:
+        emit(d5, b"x", framing="semaphore", sleep=lambda _s: None)
+        checks.append(("refuses a framing it does not have", False))
+    except CameraError:
+        checks.append(("refuses a framing it does not have", True))
 
     ok = True
     for label, good in checks:

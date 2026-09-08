@@ -25,7 +25,7 @@ Read §1 and §2, order the reader kit, then work through §15's build order. Th
 
 ## 1. What you're building
 
-An airgapped hardware wallet, 116 × 73 × 28 mm. Transactions enter and leave as QR codes; there is no wifi, bluetooth or USB data path. Signing requires a PIN and one of two liveness proofs.
+An airgapped hardware wallet, 116 × 73 × 28 mm. Transactions enter and leave as QR codes, in either of the two framings the ecosystem uses; there is no wifi, bluetooth or USB data path. Signing requires a PIN and one of two liveness proofs. §11 has an optional USB-C data variant, and §16 says what it costs.
 
 ```
    operation ──(QR)──▶  camera ─▶ parse ─▶ render as readable text ─▶ confirm
@@ -294,25 +294,32 @@ No tiers, no spending thresholds. Every key on the device requires blood, becaus
 
 ### The closed operation set
 
-It signs exactly five things:
+It signs exactly six things:
 
 - A Bitcoin spend, amount, destination, fee, change ownership
 - An Ethereum transfer, amount, destination, chain, nonce, worst-case fee
+- An ERC-20 transfer of a **registered** token, amount, recipient, contract,
+  chain, nonce, worst-case fee
 - A confidential note spend, note, amount, recipient owner
 - A direct transfer to a pubkey
 - A transfer out of a registered smart account, as EIP-712 typed data, with
   the amount, the destination, the account, the chain and the account's nonce
 
-And one thing that moves no value and is blood-locked anyway: an EIP-7702
-delegation. See "The smart-account path" below.
+And two things that move no value: cancelling a transaction the account's
+timelock is holding, and an EIP-7702 delegation. See "The smart-account path"
+below.
 
 **It refuses everything else**, including generic EVM calldata and bare hashes. If the device can't render an operation as a sentence a human can read, it doesn't sign it. A device that displays `0x9a3f…` and asks for blood is worse than one that refuses.
+
+**The ERC-20 transfer is the one exception, and how it is taken is the point.** The device is never handed calldata. It is handed a token, a recipient and an amount, and it *encodes* the 68 bytes itself — one selector, `transfer(address,uint256)`, and two arguments the screen already shows in full. A device that decodes calldata has to be right about every way 68 attacker-chosen bytes can be malformed; a device that writes them has to be right about one function. `approve` is not implemented, and neither is any other selector.
+
+Tokens are registered in advance, like chains and quorums, and for a sharper reason than either: `decimals` is where the decimal point goes. A request that could supply it could render a millionth of a token as one whole token, and nothing downstream can catch that — the signature commits to the contract and the unit count, and to neither of the two strings the owner actually reads. See §12.
 
 Two consequences of that rule are worth stating outright, because both look like missing features and neither is:
 
 **One destination per Bitcoin transaction.** A PSBT paying several recipients is refused. The device shows one destination in full, on a screen the owner can check character by character; a batch would be a total they cannot. Split the payment, or batch at a layer above the signer.
 
-**Every Ethereum field is displayed.** The chain id, the nonce and `gas_limit × max_fee_per_gas` are on the confirmation screen next to the amount. They are what the signature commits to, so they are what the owner is asked to approve. An unrecognised chain id is refused, because nobody can evaluate a bare number. A signature that does not pin the chain replays on every other EVM network the owner holds funds on. The device ships knowing two chains and is taught the rest by its owner; see §12.
+**Every Ethereum field is displayed.** The chain id, the nonce and `gas_limit × max_fee_per_gas` are on the confirmation screen next to the amount. They are what the signature commits to, so they are what the owner is asked to approve. An unrecognised chain id is refused, because nobody can evaluate a bare number. A signature that does not pin the chain replays on every other EVM network the owner holds funds on. The device ships knowing four chains and is taught the rest by its owner; see §12.
 
 Make this scope decision deliberately.
 
@@ -334,13 +341,14 @@ the signature is pinned to one chain and one deployment. That is strictly more
 than the EOA path pins, and it is why the account is registered in advance:
 
 ```bash
-python3 tools/provision.py chain --dir /boot/cell \
-    --id 11155111 --name "Sepolia (test)" --ticker ETH
 python3 tools/provision.py smart-account --dir /boot/cell \
-    --label treasury --chain-id 11155111 \
+    --label treasury --chain-ids 1,8453 \
     --address 0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC \
     --implementation 0xD54cb65224410F3Ff97a8E72f363f224419f4FB0 \
-    --threshold 2 --owners 0xCD2a...,0xbBbB...
+    --implementation-label "Multisig v1" \
+    --threshold 2 --owners 0xCD2a...,0xbBbB... \
+    --delay 172800 --executor 0x00000000a72A30AdBf38e14d36BCE2610ec3973F \
+    --fast-track
 ```
 
 An attacker who can choose `verifyingContract` chooses which account the owner
@@ -348,12 +356,116 @@ is spending from, so the device takes it from its own record and refuses every
 account it was not told about. Same rule as a registered quorum, for the same
 reason.
 
-`data` must be empty. That keeps the operation renderable, and it means the
+**This device must be one of the owners.** `--owners` has to contain the
+address `provision.py show` prints for this device, and registration is refused
+otherwise. The Bitcoin side has always enforced the equivalent — a quorum this
+device holds no key in is refused — and the EVM side did not, so any address
+could be registered and the device would take a drop of blood before the
+account rejected the signature for coming from a stranger. The owner pays the
+gate before anything on chain can tell them.
+
+**One account, several chains.** `--chain-ids` takes a list because the factory
+deploys by deterministic salt against a singleton implementation, so a quorum
+lives at the same address on every chain it was summoned on. The chain comes
+from the request and is checked against this list; it is safe to take it from
+there and nowhere else, because `chainId` is inside the domain separator, so a
+request naming the wrong chain produces a signature that deployment will not
+accept. The alternative — one registration per chain — would mean eight labels
+for one account, and the screen would then be naming the label rather than the
+network.
+
+### What the timelock does to the screen
+
+The account contract packs a `delay` beside its nonce. When it is non-zero,
+`execute` does not execute: it writes `queued[hash] = block.timestamp + delay`
+and the transaction runs later. The signed `Execute` struct is `(target, value,
+data, nonce)` and commits to **none** of that.
+
+So one signature means "send now" or "send in two days" depending on chain
+state the device cannot read, and a confirmation screen that cannot tell those
+apart is asking for blood against an outcome the owner has not been shown. The
+delay is recorded with `--delay` and stated:
+
+```
+  timing   HELD 2d after relay,
+           or now if all 2 owners sign
+```
+
+The second line is the executor. `TimelockExecutor.forward` verifies **the same
+EIP-712 Execute digest** the account does, so one signature from this device is
+accepted by both routes and the companion picks which — through the account it
+queues, through the executor with every owner's signature and `forwardEnabled`
+on, it runs immediately. Both outcomes are on the screen because the owner is
+consenting to both. Unanimity is what makes that acceptable rather than a hole:
+fast-tracking needs *all* owners, so this device is one of the signatures
+required, and no quorum short of everyone can shorten a delay behind its
+owner's back. Record it with `--executor` and `--fast-track`.
+
+### The one self-call
+
+`data` must be empty, which keeps the operation renderable and means the
 account's own governance calls are refused: changing owners, changing the
-threshold, cancelling a queued transaction all travel as `execute(target=self,
-data=...)`. Those are renderable in principle, from a fixed table of selectors
-decoded on the device, and they are deliberately not implemented yet. A
-self-call is refused.
+threshold, changing the delay all travel as `execute(target=self, data=...)`.
+
+`cancelQueued(bytes32)` is the exception, and it is the exception that lets the
+rule stand. A timelock's whole value is the window it opens between a
+transaction being authorised and it running; cancelling is what an owner does
+*in* that window, and a device that can start a delay but not stop one has
+given its owner a countdown and no button. It is safe to render where the
+others are not because its calldata has exactly one shape — four bytes of a
+selector the firmware fixes, then one 32-byte hash and nothing after it — so
+the screen can state the whole of what the signature commits to.
+
+It is **touch tier, deliberately**. `account.cancel` is not in `ALWAYS_BLOOD`.
+Everything the operation can do is subtract: it moves no value, it cannot
+create a transaction, and the worst outcome of signing one wrongly is that a
+transfer has to be proposed again. Meanwhile the case for cancelling is usually
+that something is wrong and the clock is running. The expensive gate must not
+stand between an owner and the stop button.
+
+Nothing else is decoded. One selector is one sentence to get right; a table of
+them is a table of sentences.
+
+### What the companion holds up to the camera
+
+A PSBT is recognised by its magic bytes. Everything else is a flat JSON object
+with a `type`, and a request carrying a field the device does not know is
+refused rather than ignored — a field it cannot display is a field the owner
+cannot consent to.
+
+```json
+{"type": "cell-eth-tx", "chain_id": 1, "nonce": 3, "to": "0x5aAe…",
+ "value": 100000000000000000, "gas_limit": 21000,
+ "max_fee_per_gas": 25000000000, "max_priority_fee_per_gas": 1000000000}
+
+{"type": "cell-account-execute", "account": "treasury", "chain_id": 1,
+ "to": "0x5aAe…", "value": 100000000000000000, "nonce": 4}
+
+{"type": "cell-account-cancel", "account": "treasury", "chain_id": 8453,
+ "tx_hash": "0xabab…", "nonce": 5}
+
+{"type": "cell-delegate", "account": "mine", "chain_id": 1, "nonce": 0}
+```
+
+The account is named by **label**, never by address. The address, the domain,
+the implementation, the timelock and the owner count all come from the device's
+own registration, so a request cannot choose which account it is spending from
+— that is the whole reason the registration is a record rather than a payload.
+The delegation request carries no address at all, for the reason above.
+
+The EOA path emits a raw transaction, which is self-describing. The other three
+emit a signature, which is not: sixty-five bytes say nothing about which
+account they authorise, on which chain, at which nonce, or through which route.
+So the fields the device displayed are the fields it emits.
+
+```json
+{"type": "cell-signature", "for": "cell-account-execute",
+ "account": "treasury", "chain_id": 1, "nonce": 4,
+ "signer": "0x9f3c…", "digest": "0x…", "signature": "0x…"}
+```
+
+A companion that rebuilds the digest from this envelope and gets a different
+answer knows the two disagree before it spends any gas finding out.
 
 **EIP-7702 delegation is blood-locked, unconditionally.** The authorisation is
 `keccak(0x05 || rlp([chain_id, address, nonce]))`. Three fields, all
@@ -376,12 +488,56 @@ when the timelock has to be a security property, and the delegated EOA when the
 point is to add guards and recovery to an address that already holds funds.
 `provision.py smart-account --delegated-eoa` records which one this is.
 
+**The device only ever delegates its own key.** A 7702 authorisation commits to
+the implementation, the chain and the nonce, and never to the address being
+delegated — the authority is whoever signs. So an account address taken from a
+payload would be a caption on a screen rather than a fact about the signature:
+the owner reads an address they do not recognise, approves it at blood tier,
+and delegates their own. Registration with `--delegated-eoa` therefore refuses
+any address that is not this device's, and takes the device's own when
+`--address` is omitted:
+
+```bash
+python3 tools/provision.py smart-account --dir /boot/cell \
+    --label mine --chain-ids 1 --delegated-eoa \
+    --implementation 0xD54cb65224410F3Ff97a8E72f363f224419f4FB0 \
+    --implementation-label "Multisig v1" --owners 0x9f3c...
+```
+
+`--implementation-label` is required to delegate. The screen refuses to render
+an implementation the owner has no name to check the address against, and
+before this flag existed there was no way to set one — so every account
+registered through this command produced a delegation that could not be
+displayed, and the path was unusable.
+
 **One gap that signing cannot close.** A 7702 authorisation does not commit to
 the initialisation call that has to run in the same transaction, so a relayer
 can delegate to the implementation the owner approved and initialise it with
-their own owners. That is security consideration 2 of the EIP itself. Check the
-account's state against an explorer after a delegation lands and before you
-fund it. `VALIDATION.md` carries it open.
+their own owners. That is security consideration 2 of the EIP itself.
+
+The device has no network and will not get one, so the check happens out of
+band. Have the companion read `owners()`, `threshold()`, `delay()`,
+`executor()`, `forwardEnabled()` and the delegation target into a JSON file,
+and diff it against what the device believes:
+
+```bash
+python3 tools/provision.py verify-account --dir /boot/cell \
+    --label treasury --state state.json
+```
+
+```
+  owners          MATCH        ('0x9f3c…', '0xbbbb…')
+  threshold       MATCH        2
+  delay           DIFFER       recorded 172800
+                               on chain 0
+```
+
+It exits non-zero on any disagreement, and separately says so if this device is
+not an owner on chain. Run it before you fund an account and again after a
+delegation lands. It proves nothing about the RPC that produced the file — an
+owner who is worried should take the numbers off a block explorer — but it
+turns "I think I typed it right" into an answer. `VALIDATION.md` carries the
+underlying gap open, because no signature can close it.
 
 ### Proof of life
 
@@ -869,6 +1025,76 @@ do not raise the shared bus and hope.
    conclude the Pi is dead. Budget 5 V at 2 A: the Zero 2 W peaks near 0.5 A, and a
    blood run has the webcam, laser and LEDs live at once.
 
+### Optional: the USB-C data variant
+
+**The build above has no USB data path, and that is the shipped device.** This
+subsection is how to give one up deliberately. Read §16 before you do.
+
+What it buys is a wire: a PSBT moves without anybody aiming a camera, and
+without the size limit a 240 × 240 panel puts on a transfer.
+
+**It is not HWI, and that is worth being straight about.** Bitcoin Core,
+Sparrow and Specter drive a hardware wallet through a driver inside the `hwi`
+package, and adding one is a change to that package rather than to this
+repository. What ships here is the layer underneath: `tools/companion.py` is
+the host end of the wire, and the loop is coordinator → PSBT file → companion
+→ device screen and gate → signed PSBT file → coordinator. `VALIDATION.md`
+carries the HWI driver as not built.
+
+**Wiring.** One change, and no new opening — the shell already carries a
+9.0 × 3.2 mm USB-C cutout on the right face:
+
+| | Camera build | Data variant |
+|---|---|---|
+| USB-C breakout | Power only, D+/D− desoldered | **Data-capable**, D+/D− carried through |
+| USB-C D+/D− | — | To the Pi's **OTG** micro-USB pads (the port marked `USB`, not `PWR IN`) |
+| USB-C 5 V/GND | Pi 5 V/GND pads | Pi 5 V/GND pads, unchanged |
+| QR webcam | USB OTG port, via the adapter | **Removed** |
+| micro-USB OTG adapter | Fitted | **Removed** |
+
+The webcam comes off because it has to. The Pi Zero 2 W has one data-capable
+USB port, a `dwc2` controller cannot be host and peripheral at the same time,
+and the webcam is what currently occupies it. So the variant is **$10 cheaper**
+than the bill of materials: the webcam and its adapter come off and nothing is
+added. `BOM.csv` describes the camera build and is not changed by this.
+
+**Firmware.**
+
+```ini
+# /boot/firmware/config.txt
+dtoverlay=dwc2
+```
+```
+# /etc/modules
+dwc2
+libcomposite
+```
+
+Bring the gadget up as CDC-ACM with libcomposite; it presents `/dev/ttyGS0`.
+`firmware/link.py` reads and writes one framed message per line on it and
+hands the bytes to the same `app.classify` the camera path feeds. The
+confirmation screen, the PIN and the gate are untouched.
+
+**From the host**, where the device appears as `/dev/ttyACM0`:
+
+```bash
+python3 tools/companion.py send --port /dev/ttyACM0 \
+    --in unsigned.psbt --out signed.psbt
+```
+
+It sends, then waits while you read the screen, type the PIN and pass the
+gate. It verifies nothing on purpose: it runs on the machine the device is
+airgapped *from*, so it is a pipe, and every judgement about what was signed
+belongs on the device in front of you. Both ends import the framing from
+`firmware/link.py`, so there is one definition of it rather than two that can
+drift.
+
+**Check the power budget on your build.** §11 asks for 5 V at 2 A because a
+blood run has the webcam, laser and LEDs live at once. Drawing power from a
+host over the same USB-C cable means a laptop USB-A port at 0.9 A will not do
+it. Removing the webcam recovers some of that; measure it rather than assume,
+and keep a mains supply for blood runs if it comes out short.
+
 ### Radio removal, non-negotiable
 
 ```ini
@@ -1022,9 +1248,17 @@ The file is one co-signer per line, `label fingerprint path xpub`, and it must i
 
 ### EVM chains have to be registered too
 
-The device ships knowing Ethereum and Sepolia. Every other chain id is refused
-until you register it, with the name and the native-token ticker it should be
-displayed under:
+The device ships knowing Ethereum, Base, Robinhood and Sepolia. Those four are
+built in because the account contracts in "The smart-account path" above are
+deployed on them at the addresses quoted there, so a builder registering a
+smart account has a chain already named for it and never types a chain id to
+get started. All four denominate in ETH, which is the only reason a ticker can
+be asserted rather than asked for.
+
+Every other chain id is refused until you register it, with the name and the
+native-token ticker it should be displayed under. The same deployment also
+lives on Arbitrum, OP Mainnet, MegaETH and Base Sepolia, and those are
+deliberately left to the owner:
 
 ```bash
 python3 tools/provision.py chain --dir /boot/cell \
@@ -1032,6 +1266,59 @@ python3 tools/provision.py chain --dir /boot/cell \
 python3 tools/provision.py chain --dir /boot/cell \
     --id 137 --name "Polygon" --ticker POL
 ```
+
+### And ERC-20 tokens
+
+Nothing ships pre-registered. `0xA0b8…eB48` is USDC on Ethereum because Circle
+says so, not because this project can derive it, so every token is your own
+claim:
+
+```bash
+python3 tools/provision.py token --dir /boot/cell \
+    --chain-id 1 --address 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 \
+    --symbol USDC --decimals 6
+```
+
+The chain has to be registered first. Both fields fail silently and they fail
+differently: a wrong **symbol** shows you the name of a token you do not hold,
+and a wrong **decimals** moves the decimal point. At 6 where the contract uses
+18, a request for a millionth of a token renders as one whole token and you
+approve a screen that is off by a factor of a trillion.
+
+So read both off a block explorer's own page for that contract, and read back
+the confirmation the command prints. `provision.py show` lists what is
+registered, with the contract checksummed the way the screen shows it.
+
+The confirmation screen names both addresses in full, because an ERC-20
+transfer is addressed to the *contract* and carries the *recipient* in its
+calldata — one address on a screen is the wrong one, and two unlabelled
+addresses are worse:
+
+```
+SEND USDC ON ETHEREUM
+  amount   250 USDC
+  to
+           0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045
+  USDC contract
+           0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
+  max fee  0.00195 ETH
+  chain id 1
+  nonce    3
+```
+
+Check the contract, not just the symbol. Nothing about "250 USDC" on a screen
+distinguishes real USDC from a contract somebody deployed yesterday; the
+address does, and it is there for that.
+
+**On tiers.** `Policy.blood_above` is denominated in the chain's smallest unit
+— wei — and a token amount is not that. 250 USDC is 250000000 units, which
+compares *below* one ether's 10¹⁸ wei, so pricing a token transfer on its own
+number would let a large stablecoin move slip under a floor meant to catch it.
+The device holds no oracle and does not guess: any positive token amount
+prices above every floor an owner can set. With `blood_above` unset — the
+default, meaning amount-based escalation is off — a token transfer runs at
+touch tier exactly as a thousand-ether transfer does. Put `tx.token` in the
+policy's `blood_locked` set if you want it gated regardless.
 
 **Why this is not just a shorter list.** The signature commits to the chain id,
 but nobody reads a chain id. The name and the ticker are what the owner
@@ -1047,7 +1334,7 @@ registration that names the wrong network. It is wrong on every transaction
 you will ever approve on that chain.
 
 Registrations are refused if they would rename a chain already registered, or
-relabel one of the two built in. Names are capped at 24 characters and tickers
+relabel one of the four built in. Names are capped at 24 characters and tickers
 at 8, both printable ASCII only: a name carrying a direction override or a
 zero-width joiner renders as something other than what was registered.
 
@@ -1065,6 +1352,104 @@ drive one you started yourself.
 
 Worth doing before you fund anything, and worth doing again after any change to `psbt.py`, `tx.py` or `addresses.py`. It is the only check in this repo that answers on its own authority rather than by comparison, and it earned its place the first time it ran by finding a malformed BIP-174 proprietary key that made every PSBT this device produced unreadable to Core.
 
+### Both QR framings
+
+Transfers arrive and leave in one of two encodings, and the device accepts
+either without being told which:
+
+| | |
+|---|---|
+| `pNofM` | `p1of4 cHNidP8B…`. The Specter convention, and what this device shipped with. Fixed rate: the receiver needs every index |
+| UR 2.0 | `ur:crypto-psbt/1-9/lpadascf…`. BCR-2020-005, what Sparrow and the Keystone-compatible coordinators reach for first. Rateless: past the first pass the sender emits XOR mixtures of fragments, and any sufficient subset reconstructs |
+
+The difference matters on this hardware. A `pNofM` loop repeats the same
+frames, so a reader that keeps missing frame four never finishes, however long
+it loops. A UR loop's second pass is not a repeat, and a permanently missed
+frame is recovered from a mixture of others. On a $8 webcam and a Pi Zero
+that is the difference between a transfer that converges and one that stalls.
+
+**The device replies in the framing it was asked in.** A coordinator that can
+talk to this device cannot then fail to read its answer, and neither encoding
+is a default the other has to catch up with.
+
+### Handing the coordinator your accounts
+
+The THIS DEVICE screen prints the extended public keys so somebody can type
+them into a coordinator. That transcription is where a character gets dropped,
+and a wallet built on a wrong xpub watches addresses nobody can spend from and
+shows the owner a receive address that is not theirs.
+
+So the same screen offers to emit them instead: **CONFIRM** exports every
+Bitcoin account as one `ur:crypto-account`, and a coordinator scans it and has
+all four script types at once. It signs nothing, it needs no PIN and no seed,
+and it is built from the recorded xpubs like the receive screen is.
+
+It is behind a second confirmation with a warning on it, because an account
+xpub reveals **every address that wallet will ever use, forever**, to whoever
+reads it. A coordinator on your own machine is the ordinary case; a phone
+camera over somebody's shoulder is not, and you are the only one in a position
+to tell which room you are in.
+
+The Ethereum account is not in the export — Ethereum has no output script —
+and neither are the multisig accounts, because a quorum descriptor needs your
+co-signers' keys and this device holds only its own share. `provision.py show`
+prints the multisig descriptor for those.
+
+`firmware/ur.py` builds it against BCR-2020-007, -010 and -015 on the legacy
+tag numbers (303, 308, 311) rather than the renumbered `ur:hdkey` range,
+because the point of an export is that a coordinator somebody already has can
+read it. All four descriptors are checked as substrings of BCR-2020-015's own
+published vector, from its own test seed.
+
+### EIP-4527: what a browser wallet sends
+
+UR carries more than PSBTs. MetaMask's and Rabby's QR-account flows emit
+`ur:eth-sign-request` (EIP-4527), and the device answers with
+`ur:eth-signature` — so the EVM half is reachable from a browser without a
+cable, which is the parity that matters for a device with no USB port.
+
+The transaction arrives **encoded** rather than as fields, and that is the one
+place this design's usual rule is inverted. The device does not hash what it
+was handed. It decodes the EIP-2718 payload into fields, rebuilds the
+transaction with the ordinary constructor so every check in §12's "what the
+device recomputes rather than believes" applies, then **re-encodes it and
+compares byte for byte** with what arrived. A payload carrying anything the
+decoder dropped fails that comparison instead of being signed quietly.
+
+That last step is a control, not a formality. RLP has non-canonical spellings —
+a leading zero on an integer, a long-form length prefix on a short string —
+and each decodes to the same fields and re-encodes to different bytes. Without
+the comparison the device would display a correct summary and sign a digest
+over a payload it had never reproduced.
+
+Four things are refused, and the refusal names which:
+
+| `dataType` | | |
+|---|---|---|
+| 1 | A legacy transaction | Not an encoding this device builds |
+| 2 | A typed transaction | **Signed** |
+| 3 | A personal message | Blind signing. A hex string presented as a message is how a Permit gets signed by somebody who believed they were logging in |
+| 4 | EIP-712 typed data | Blind signing, except the registered smart-account messages in §5 |
+
+Two more checks happen before the PIN is asked for, so a request that was
+never for this device costs nothing to refuse: the derivation path must be the
+one this device signs Ethereum at, and the address, if the request names one,
+must be this device's. Neither can widen anything — `wallet.sign_eth` checks
+the derived address against the recorded account regardless — but a refusal
+that names what was expected is worth more than one that fails closed silently.
+
+The reply is a signature, not a transaction. The companion assembles and
+broadcasts, exactly as it does for a smart account.
+
+`firmware/ur.py` is checked against the reference implementation's own
+published vectors — the PRNG streams, the alias sampler, the shuffle, the
+degree chooser, the fragment selection and two complete UR encodings, string
+for string. That is not thoroughness for its own sake: the fountain mixture in
+part 13 of a transfer is a function of a seeded Xoshiro256\*\*, a Walker-Vose
+alias table and a particular Fisher-Yates, and getting any one of them subtly
+wrong yields plausible URs that no other implementation can decode. That is a
+failure you would discover holding a device you have already bled into.
+
 ### Both PSBT dialects
 
 The device reads BIP-174 version 0 and BIP-370 version 2, and hands back whichever it was given. A v2 PSBT that came back as v0 is one a coordinator may not be able to finalise. Version 2 is rebuilt into the transaction its scattered fields describe and then verified by exactly the same code, so there is one set of rules about amounts, change and sighashes rather than two that could drift apart.
@@ -1073,7 +1458,8 @@ The device reads BIP-174 version 0 and BIP-370 version 2, and hands back whichev
 
 - **Taproot script-path spends.** The device holds no leaf scripts and could not render one, so an input whose output key is not the tweak of a key it derives is refused. Key-path spends are fully supported.
 - **More than one destination per Bitcoin transaction**, for the reason in section 5.
-- **Any calldata on Ethereum.**
+- **Any calldata except an ERC-20 `transfer` to a registered token**, which the device encodes rather than reads. `approve` is not implemented: an unlimited approval to a hostile spender drains the account with no further signature, which is the risk profile of a delegation rather than of a transfer, and it needs the allowlist work before it is worth having. No other selector, and no arbitrary EIP-712 typed data beyond the registered smart-account messages.
+- **Anything on a second curve.** Solana, Cardano, XRP and the rest need ed25519 and SLIP-0010, which is a second signing core in a device whose argument is that there is one, checked against published vectors.
 
 ### Starting on boot
 
@@ -1391,7 +1777,7 @@ A sequence of checks, not a schedule, with the parts in front of you this is a w
 | 6 | 600 s time series, both classes | Blood starts decorrelated and arrests; dye never had speckle. Judge on what G5/G6 measure, early D, late D, the drop and its direction, not on a curve fit |
 | 7 | **Spoof panel**, the reader is done | ROC generated, thresholds set, documented. **This is the result the whole design rests on** |
 | 8 | ATECC608B configured, zones locked, PIN counter live | `atecc_config.py verify --behaviour` passes every line BEFORE `lock-data`; `se_atecc.py --probe` answers; ten wrong PINs wipe a device you can afford to wipe |
-| 9 | Firmware installed, `run_tests.py` green on the Pi | 46 suites pass on the device itself, not just your laptop |
+| 9 | Firmware installed, `run_tests.py` green on the Pi | 49 suites pass on the device itself, not just your laptop |
 | 10 | Provisioned, and the backup written down | `provision.py` re-reads its own seed; you have the words on paper |
 | 10a | Chamber enrolled (optional) | `provision.py enroll-chamber`. The seed re-wraps and still reopens. Back up `chamber.npz` beside the words |
 | 11 | Regtest round trip | `tools/regtest_e2e.py`. Core accepts and mines what the device signed |
@@ -1413,6 +1799,8 @@ Stated so co-signers and reviewers can reason about them directly.
 **The gate proves fresh mammalian blood.** Mammalian haemoglobin is spectrally near-identical to human and clots on the same schedule. Butcher blood fails. It is anticoagulated or already clotted, but the device is not a species assay, and it does not need to be: the PIN is what makes the key yours. Species discrimination means DNA sequencing, which is a different instrument.
 
 **Citrate is reversible, and G6 does not catch a recalcified sample.** Citrate anticoagulates by chelating calcium; adding calcium back restores clotting, which is exactly how a recalcified PT/aPTT assay works. A citrated sample recalcified immediately before loading starts liquid and arrests, so it passes the motion gates as well as the chemistry ones. EDTA chelates far more avidly and is not practically reversible outside a lab, so EDTA tube blood remains rejected, and it is EDTA that a stolen tube of clinical blood is most likely to contain. What G6 defeats is the opportunistic replay of a stored sample. It does not defeat a prepared attacker who holds the owner's blood, the device and the PIN together; nothing optical at this price does, and the quorum in §4 is the answer to that threat rather than a better gate.
+
+**The USB-C data variant gives up two things, and firmware cannot give them back.** §11 has the wiring. The substitution argument survives it — what the device signs is what it rendered, whatever route the bytes took — but two others do not. *Exfiltration:* QR out is a screen the owner is watching, moving 300 bytes a frame; a CDC link is megabits, bidirectional and unobserved, to a device holding a seed, and nothing bounds what compromised firmware could send up it. The bound on the camera build is physical, and this removes it. *The stack under the parser:* on the camera build the whole input surface is a lens and a regex, confined by `cell.service` to an unprivileged user with four device nodes; the variant puts the Linux USB gadget stack in front of that parser, and that is kernel code running as root. Choose it for a device that signs often from one trusted machine; do not choose it for the device holding the reserve.
 
 **Physical possession of both device and PIN is the boundary.** As with every hardware wallet, hold what you would not be attacked for, and use the multisig quorum in §4 when the amount justifies it. `verify_quorum()` makes "everyone signed with blood" a mechanical check.
 

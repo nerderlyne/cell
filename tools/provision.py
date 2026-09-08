@@ -30,10 +30,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "firmware"))
 
+import addresses                                                # noqa: E402
 import bip39                                                    # noqa: E402
 import duress                                                   # noqa: E402
 import eip712                                                   # noqa: E402
 import eth                                                      # noqa: E402
+import ops                                                      # noqa: E402
 import seedstore                                                # noqa: E402
 import signer                                                   # noqa: E402
 import wallet                                                   # noqa: E402
@@ -391,14 +393,21 @@ def _save(out: Path, prov: wallet.Provisioning, network: str) -> None:
                      for m in prov.multisig],
         "chains": [{"chain_id": cid, "name": nm, "ticker": tk}
                    for cid, (nm, tk) in sorted(prov.chains.items())],
+        "tokens": [{"chain_id": cid, "address": addr, "symbol": sym,
+                    "decimals": dec}
+                   for (cid, addr), (sym, dec) in sorted(prov.tokens.items())],
         "smart_accounts": [{"label": a.label, "address": a.address,
-                            "chain_id": a.chain_id,
+                            "chain_ids": list(a.chain_ids),
                             "implementation": a.implementation,
+                            "implementation_label": a.implementation_label,
                             "threshold": a.threshold,
                             "owners": list(a.owners),
                             "domain_name": a.domain_name,
                             "domain_version": a.domain_version,
-                            "delegated_eoa": a.delegated_eoa}
+                            "delegated_eoa": a.delegated_eoa,
+                            "delay_seconds": a.delay_seconds,
+                            "executor": a.executor,
+                            "fast_track": a.fast_track}
                            for a in sorted(prov.smart_accounts,
                                            key=lambda x: x.label)],
     }, indent=2) + "\n")
@@ -452,13 +461,24 @@ def _load(d: Path) -> wallet.Provisioning:
                         for a in data.get("decoy_accounts", [])])
     for a in data.get("smart_accounts", []):
         acct = eip712.SmartAccount(
-            label=a["label"], address=a["address"], chain_id=a["chain_id"],
+            label=a["label"], address=a["address"],
+            # `chain_id` is what records written before accounts became
+            # multi-chain carry. Reading it is not politeness: this record is
+            # what the device boots from, so a field rename with no fallback
+            # is a firmware update that leaves a provisioned device unable to
+            # load its own accounts, and the only way back is the words.
+            chain_ids=tuple(a["chain_ids"]) if "chain_ids" in a
+            else (a["chain_id"],),
             implementation=a["implementation"],
+            implementation_label=a.get("implementation_label", ""),
             threshold=a.get("threshold", 1),
             owners=tuple(a.get("owners", ())),
             domain_name=a.get("domain_name", "Multisig"),
             domain_version=a.get("domain_version", "1"),
-            delegated_eoa=a.get("delegated_eoa", False))
+            delegated_eoa=a.get("delegated_eoa", False),
+            delay_seconds=a.get("delay_seconds", 0),
+            executor=a.get("executor", eip712.ZERO_ADDRESS),
+            fast_track=a.get("fast_track", False))
         prov.smart_accounts.append(acct)
         eip712.register_account(acct)
 
@@ -473,6 +493,14 @@ def _load(d: Path) -> wallet.Provisioning:
         # in here, or built in, is a chain the device refuses outright.
         eth.register_chain(c["chain_id"], c["name"], c["ticker"])
         prov.chains[c["chain_id"]] = (c["name"], c["ticker"])
+    # Tokens AFTER chains, and not by accident: register_token refuses a token
+    # on a chain this device cannot name, so a record whose tokens were applied
+    # first would reject its own contents.
+    for t in data.get("tokens", []):
+        eth.register_token(t["chain_id"], t["address"], t["symbol"],
+                           t["decimals"])
+        prov.tokens[(t["chain_id"], t["address"].lower())] = (t["symbol"],
+                                                              t["decimals"])
     return prov
 
 
@@ -567,6 +595,54 @@ def cmd_chain(args) -> int:
     return 0
 
 
+def cmd_token(args) -> int:
+    """Register an ERC-20 token by contract, symbol and decimal places.
+
+    Nothing is built in. `0xA0b8...eB48` is USDC on Ethereum because Circle
+    says so, not because this project can derive it, so every token is the
+    owner's own claim — the same rule as `chain`, `multisig` and
+    `smart-account`, for the same reason.
+
+    THE TWO FIELDS FAIL DIFFERENTLY, AND BOTH FAIL SILENTLY. A wrong symbol
+    shows the owner the name of a token they do not hold. A wrong `decimals`
+    puts the decimal point somewhere else: at 6 where the contract uses 18, a
+    request for a millionth of a token renders as one whole token, and the
+    owner approves a screen that is off by a factor of a trillion. Neither is
+    catchable downstream, because the signature commits to the contract and the
+    unit count, and to neither of these strings.
+
+    So read both off a block explorer's own page for the contract address, and
+    read the confirmation this prints back against it.
+    """
+    d = Path(args.dir)
+    prov = load(d)
+    try:
+        address = eth.to_checksum_address(args.address)
+        eth.register_token(args.chain_id, address, args.symbol, args.decimals)
+    except (eth.BadEthTransaction, addresses.BadAddress) as e:
+        print(f"Refused: {e}")
+        return 1
+    prov.tokens[(args.chain_id, address.lower())] = (args.symbol, args.decimals)
+
+    network = json.loads((d / ACCOUNTS).read_text())["network"]
+    _save(d, prov, network)
+    chain_name, ticker = eth.CHAINS[args.chain_id]
+    one = 10 ** args.decimals
+    print(f"Registered {args.symbol} on {chain_name} ({args.chain_id}) at "
+          f"{address}, with {args.decimals} decimals.")
+    print("\nConfirmation screens for this token will now read:")
+    print(f"  SEND {args.symbol} ON {chain_name.upper()}")
+    print(f"  amount   {ops.format_token(one * 250, args.decimals, args.symbol)}")
+    print(f"  {args.symbol} contract")
+    print(f"           {address}")
+    print(f"\nThat screen says 250 {args.symbol} for {one * 250} of the")
+    print(f"contract's own units. If the contract does not use "
+          f"{args.decimals} decimals,")
+    print("every amount you approve for this token will be wrong by a power of")
+    print("ten, and nothing downstream can catch it. Check it now.")
+    return 0
+
+
 def cmd_smart_account(args) -> int:
     """Register a smart account the device may authorise spends from.
 
@@ -590,25 +666,45 @@ def cmd_smart_account(args) -> int:
     d = Path(args.dir)
     prov = load(d)
     owners = tuple(o.strip() for o in (args.owners or "").split(",") if o.strip())
+    chain_ids = tuple(int(c) for c in str(args.chain_ids).split(",") if c.strip())
+    address = args.address
+    if args.delegated_eoa and address is None:
+        # The whole point of delegating a CELL-borne EOA is that the address
+        # is this device's own. Asking the owner to type it back in is asking
+        # them to make a transcription error the device would then refuse, or
+        # worse, to paste somebody else's.
+        address = prov.eth_address()
+        print(f"Delegating this device's own address: {address}\n")
+    if address is None:
+        print("Refused: --address is required (or --delegated-eoa, which "
+              "uses this device's own address)")
+        return 1
     acct = eip712.SmartAccount(
-        label=args.label, address=args.address, chain_id=args.chain_id,
-        implementation=args.implementation, threshold=args.threshold,
+        label=args.label, address=address, chain_ids=chain_ids,
+        implementation=args.implementation,
+        implementation_label=args.implementation_label,
+        threshold=args.threshold,
         owners=owners, domain_name=args.domain_name,
-        domain_version=args.domain_version, delegated_eoa=args.delegated_eoa)
+        domain_version=args.domain_version, delegated_eoa=args.delegated_eoa,
+        delay_seconds=args.delay, executor=args.executor,
+        fast_track=args.fast_track)
     try:
-        eip712.register_account(acct)
-    except eip712.BadTypedData as e:
+        prov.register_smart_account(acct)
+    except (eip712.BadTypedData, wallet.WalletError) as e:
         print(f"Refused: {e}")
         return 1
-    prov.smart_accounts = [a for a in prov.smart_accounts
-                           if a.label != acct.label] + [acct]
 
     network = json.loads((d / ACCOUNTS).read_text())["network"]
     _save(d, prov, network)
-    name = eth.CHAINS[acct.chain_id][0]
-    print(f"Registered {acct.label!r} at {acct.address} on {name}.")
-    print(f"  implementation  {acct.implementation}")
-    print(f"  quorum          {acct.threshold} of {len(owners) or 'unrecorded'}")
+    names = ", ".join(eth.CHAINS[c][0] for c in acct.chain_ids)
+    print(f"Registered {acct.label!r} at {acct.address} on {names}.")
+    print(f"  implementation  {acct.implementation}"
+          f"{' (' + acct.implementation_label + ')' if acct.implementation_label else ''}")
+    print(f"  quorum          {acct.threshold} of {len(owners)}")
+    print(f"  timelock        {ops.format_duration(acct.delay_seconds)}")
+    if acct.fast_track:
+        print(f"  fast track      on, needs all {len(owners)} owners")
+    print(f"  this device     {prov.eth_address()}")
     if acct.delegated_eoa:
         print("\n  This is recorded as an EIP-7702 delegated EOA. The key behind")
         print("  that address stays a superuser: it can send ordinary")
@@ -617,9 +713,100 @@ def cmd_smart_account(args) -> int:
     print("\nConfirmation screens for this account will read:")
     print(f"  SEND FROM {acct.label.upper()}")
     print(f"  account  {acct.address}")
-    print(f"  chain    {name} ({acct.chain_id})")
-    print("\nRead the account address back against a block explorer. Nothing")
-    print("downstream of this command can catch an address that is wrong here.")
+    print(f"  chain    {eth.CHAINS[acct.chain_ids[0]][0]} ({acct.chain_ids[0]})")
+    if acct.delay_seconds:
+        held = ops.format_duration(acct.delay_seconds)
+        print(f"  timing   HELD {held} after relay"
+              + (f",\n           or now if all {len(owners)} owners sign"
+                 if acct.fast_track else ""))
+    print("\nNothing above was read from a chain. Run `verify-account` against")
+    print("a state dump before you fund this, and again after any delegation")
+    print("lands: a 7702 authorisation does not commit to the init call that")
+    print("runs beside it, so the owners on chain may not be the owners here.")
+    return 0
+
+
+def cmd_verify_account(args) -> int:
+    """Compare a registered account against what the chain actually says.
+
+    THE ONE CHECK NOTHING ELSE CAN MAKE. Every other command in this file
+    records what the owner believes. This one is where that belief meets the
+    deployment, and it exists because two of the gaps in the design converge
+    here:
+
+      A 7702 authorisation commits to the implementation, the chain and the
+      nonce, and NOT to the `init` call that runs in the same transaction. A
+      relayer can delegate to exactly the implementation the owner approved
+      and initialise it with their own owners. That is security consideration
+      2 of EIP-7702 and no signature can close it.
+
+      Nothing the device records about owners, threshold, delay or executor
+      was ever read from a chain. It is all transcription, and a transcription
+      error in `delay` means the confirmation screen states a timelock that
+      does not exist.
+
+    The device has no network and is never going to have one, so the state
+    arrives as a file: the companion calls `owners()`, `threshold()`,
+    `delay()`, `executor()` and the executor's `forwardEnabled()`, and writes
+    what it got. This compares the two and says which fields differ. It proves
+    nothing about the RPC that produced the file -- an owner who is worried
+    should take the numbers off a block explorer instead -- but it does turn
+    "I think I typed it right" into an answer.
+    """
+    prov = load(Path(args.dir))
+    try:
+        acct = eip712.account(args.label)
+    except eip712.BadTypedData as e:
+        print(f"Refused: {e}")
+        return 1
+    try:
+        state = json.loads(Path(args.state).read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"Refused: cannot read {args.state}: {e}")
+        return 1
+    if not isinstance(state, dict):
+        print("Refused: the state dump is not an object")
+        return 1
+
+    def _addrs(v):
+        return tuple(sorted(str(x).lower() for x in v)) if isinstance(v, list) \
+            else None
+
+    rows = [
+        ("owners", _addrs(list(acct.owners)), _addrs(state.get("owners"))),
+        ("threshold", acct.threshold, state.get("threshold")),
+        ("delay", acct.delay_seconds, state.get("delay")),
+        ("executor", acct.executor.lower(),
+         str(state.get("executor", "")).lower() or None),
+        ("fast track", acct.fast_track, state.get("forwardEnabled")),
+        ("implementation", acct.implementation.lower(),
+         str(state.get("implementation", "")).lower() or None),
+    ]
+    print(f"{args.label}  {acct.address}\n")
+    bad = 0
+    for name, recorded, actual in rows:
+        if actual is None:
+            print(f"  {name:<15} NOT IN DUMP  recorded {recorded}")
+            bad += 1
+            continue
+        if recorded == actual:
+            print(f"  {name:<15} MATCH        {recorded}")
+            continue
+        bad += 1
+        print(f"  {name:<15} DIFFER       recorded {recorded}")
+        print(f"  {'':<15}              on chain {actual}")
+    mine = prov.eth_address().lower()
+    on_chain = _addrs(state.get("owners")) or ()
+    if on_chain and mine not in on_chain:
+        bad += 1
+        print(f"\n  This device ({prov.eth_address()}) is NOT an owner on chain.")
+        print("  Every signature it makes for this account would be rejected.")
+    if bad:
+        print(f"\n{bad} field(s) do not agree. This account is not what the")
+        print("device will tell you it is. Do not fund it until they match.")
+        return 1
+    print("\nEvery recorded field matches the dump. The screens this device")
+    print("draws for this account describe the deployment.")
     return 0
 
 
@@ -642,6 +829,41 @@ def cmd_show(args) -> int:
     if not registered:
         print("  No chains registered beyond the built-in two; every other")
         print("  chain id is refused. Add one with `provision.py chain`.")
+    tokens = data.get("tokens", [])
+    if tokens:
+        print("\n  ERC-20 tokens:")
+        for t in tokens:
+            name = eth.CHAINS.get(t["chain_id"], (f"chain {t['chain_id']}",))[0]
+            # Checksummed for display, though it is stored folded: the
+            # confirmation screen shows EIP-55, and this is the output an
+            # owner reads back against it.
+            print(f"    {t['symbol']:<8} {t['decimals']:>2} dp  {name}")
+            print(f"             {eth.to_checksum_address(t['address'])}")
+    else:
+        print("\n  No ERC-20 tokens registered; a transfer of one is refused.")
+        print("  Add one with `provision.py token`.")
+    prov = load(d)
+    try:
+        evm = prov.eth_address()
+    except wallet.WalletError:
+        evm = None
+    if evm:
+        # The one public value that had no way out of the device. A co-signer
+        # building an EVM quorum needs it, `smart-account --owners` refuses
+        # without it, and until it was printed here the only way to read it
+        # was to import the firmware on a laptop.
+        print(f"\n  ethereum address  {evm}")
+        print("  Same on every chain. This is the owner address to give a")
+        print("  co-signer, and the one --owners must contain.")
+    for a in prov.smart_accounts:
+        names = ", ".join(eth.CHAINS[c][0] for c in a.chain_ids)
+        print(f"\n  account {a.label}: {a.address}")
+        print(f"    on            {names}")
+        print(f"    quorum        {a.threshold} of {len(a.owners)}")
+        print(f"    timelock      {ops.format_duration(a.delay_seconds)}"
+              + (", fast track on" if a.fast_track else ""))
+        if a.delegated_eoa:
+            print("    delegated EOA: its key is still a superuser")
     print("\nThese are public. Give them to a coordinator to watch the wallet.")
     print("\nFor a multisig co-signer file, your line is:")
     for a in data["accounts"]:
@@ -844,21 +1066,57 @@ def main() -> int:
                    help="native token symbol, e.g. ETH or POL")
     p.set_defaults(fn=cmd_chain)
 
+    p = sub.add_parser("token",
+                       help="register an ERC-20 token the device may transfer")
+    p.add_argument("--dir", required=True)
+    p.add_argument("--chain-id", type=int, required=True, dest="chain_id",
+                   help="the chain this contract is deployed on, already "
+                        "registered with `chain`")
+    p.add_argument("--address", required=True, help="the token contract")
+    p.add_argument("--symbol", required=True,
+                   help=f"what to call it on screen, "
+                        f"<={eth.MAX_SYMBOL} printable ASCII characters")
+    p.add_argument("--decimals", type=int, required=True,
+                   help="the contract's own `decimals()`. Read it off an "
+                        "explorer; getting it wrong misplaces the decimal "
+                        "point on every amount you ever approve")
+    p.set_defaults(fn=cmd_token)
+
     p = sub.add_parser("smart-account",
                        help="register a smart account to authorise spends from")
     p.add_argument("--dir", default="/boot/cell")
     p.add_argument("--label", required=True,
                    help='shown as "SEND FROM <LABEL>", 1 to 16 characters')
-    p.add_argument("--address", required=True,
-                   help="the account itself, EIP-55 checksummed")
-    p.add_argument("--chain-id", type=int, required=True,
-                   help="must already be registered with `chain`")
+    p.add_argument("--address",
+                   help="the account itself, EIP-55 checksummed. Omit with "
+                        "--delegated-eoa to use this device's own address")
+    p.add_argument("--chain-ids", required=True,
+                   help="comma-separated chain ids the account lives on, all "
+                        "already registered with `chain`. The factory deploys "
+                        "by deterministic salt, so one account has the same "
+                        "address on every chain it was summoned on")
     p.add_argument("--implementation", required=True,
                    help="the contract the account runs, EIP-55 checksummed")
+    p.add_argument("--implementation-label", default="",
+                   help="what to call that contract on the delegation screen. "
+                        "REQUIRED to delegate: the screen refuses to render an "
+                        "implementation the owner has no name to check")
     p.add_argument("--threshold", type=int, default=1,
                    help="signatures the account requires")
     p.add_argument("--owners", default="",
-                   help="comma-separated owner addresses, for the record")
+                   help="comma-separated owner addresses. This device's own "
+                        "address must be among them; `show` prints it")
+    p.add_argument("--delay", type=int, default=0,
+                   help="the account's timelock in seconds. Non-zero means a "
+                        "spend queues rather than executes, and the "
+                        "confirmation screen says so")
+    p.add_argument("--executor", default=eip712.ZERO_ADDRESS,
+                   help="the TimelockExecutor module, if this account uses one")
+    p.add_argument("--fast-track", action="store_true",
+                   help="the executor's forwardEnabled is on, so all owners "
+                        "signing together can skip the timelock. Shown on the "
+                        "confirmation screen, because one signature serves "
+                        "both routes")
     p.add_argument("--domain-name", default="Multisig",
                    help="EIP-712 domain name the account declares")
     p.add_argument("--domain-version", default="1",
@@ -867,6 +1125,15 @@ def main() -> int:
                    help="this address is an EOA delegated under EIP-7702, so "
                         "its key remains a superuser")
     p.set_defaults(fn=cmd_smart_account)
+
+    p = sub.add_parser("verify-account",
+                       help="check a registered account against chain state")
+    p.add_argument("--dir", default="/boot/cell")
+    p.add_argument("--label", required=True)
+    p.add_argument("--state", required=True,
+                   help="JSON from the companion: owners, threshold, delay, "
+                        "executor, forwardEnabled, implementation")
+    p.set_defaults(fn=cmd_verify_account)
 
     args = ap.parse_args()
     if getattr(args, "pin", None) is not None and not args.pin.isdigit():

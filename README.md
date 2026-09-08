@@ -10,7 +10,9 @@ Airgapped signer for Bitcoin and Ethereum. Raspberry Pi, 3D-printed enclosure, $
 
 ## What it is
 
-Transactions arrive as a QR code read by the camera and leave as a QR code on the display. There is no wifi, no bluetooth and no USB data path.
+Transactions arrive as a QR code read by the camera and leave as a QR code on the display, in either of the two framings the airgap ecosystem uses. There is no wifi, no bluetooth and no USB data path.
+
+`BUILD.md` §11 describes an optional USB-C data variant, for a device that signs often from one machine. It costs two properties §16 sets out, and it is not the default.
 
 To authorise a signature you enter an eight-digit PIN and pass one of two liveness proofs.
 
@@ -29,7 +31,7 @@ A button press costs nothing, so malware, an automated script and a deliberate h
 
 ## Status
 
-**Firmware: complete.** 46 suites run on every commit, covering the signing stack against the vectors published in the BIPs, RFC 6979 and the EIPs, both liveness gates, the whole device loop, and the documented build sequence driven end to end. Bitcoin Core funds an address this firmware derives, and accepts and mines the spend it signs.
+**Firmware: complete.** 49 suites run on every commit, covering the signing stack against the vectors published in the BIPs, RFC 6979 and the EIPs, both liveness gates, the whole device loop, and the documented build sequence driven end to end. Bitcoin Core funds an address this firmware derives, and accepts and mines the spend it signs.
 
 **Enclosure: complete.** Eleven parts are printed, all generated from the same constants the specification quotes, all mesh-checked and fit-checked before they are written.
 
@@ -55,7 +57,7 @@ The gate logic, the signing stack and the whole device loop run on any machine.
 
 ```bash
 pip install -r firmware/requirements.txt
-python firmware/run_tests.py           # all 46 suites
+python firmware/run_tests.py           # all 49 suites
 ```
 
 Or one piece at a time:
@@ -184,14 +186,24 @@ Both chains sign on secp256k1, so one key and one signing core serve both. The w
 | `psbt.py` / `tx.py` | BIP-174 and BIP-370 parsing, and all three sighash algorithms |
 | `addresses.py` | bech32 and bech32m, every script type, EIP-55 |
 | `eth.py` | RLP and EIP-1559, built on the device from fields it displays |
-| `eip712.py` | EIP-712 typed data for smart accounts, and the EIP-7702 delegation |
+| `eip712.py` | EIP-712 typed data for smart accounts, the timelock the screen states, and the EIP-7702 delegation |
 | `beacon.py` | The beacon digest, and the period the owner reads |
-| `qr.py` | The airgap: animated frames, and reassembly that refuses substitution |
+| `qr.py` | The airgap: `pNofM` frames, and reassembly that refuses substitution |
+| `ur.py` | UR 2.0 with fountain codes, and EIP-4527, against the published vectors |
+| `link.py` | The USB-C data variant's wire. Opt-in, and it costs two properties |
 | `app.py` | The loop: scan, show, confirm, PIN, gate, sign, emit |
 
 The device signs a closed set of operations it can render as readable text, and refuses everything else, including arbitrary EVM calldata. Two consequences look like missing features and are not: a PSBT paying several recipients is refused, because the owner can check one destination character by character and cannot check a total; and every Ethereum field (chain id, nonce, and `gas_limit × max_fee_per_gas`) is on the confirmation screen, with unrecognised chain ids refused.
 
-Multisig and smart accounts must be registered before they can be signed. Without the co-signers on file, "is this output mine?" collapses to "does it contain a key of mine?", and a hostile coordinator can build a script holding one key of yours and the rest theirs; it hashes correctly, the wallet calls it change, and the money moves somewhere you cannot spend alone. With the quorum registered the device rebuilds the exact script your co-signers produce and compares it byte for byte. `tools/provision.py multisig` does the registering.
+**Handing over your accounts.** The device prints its extended public keys on screen, and will also emit them as one `ur:crypto-account` so a coordinator scans all four Bitcoin script types instead of somebody retyping an xpub. It signs nothing and needs no PIN. It sits behind a warning, because an account xpub reveals every address that wallet will ever use, forever, to whoever reads it.
+
+**Both QR framings, and a browser.** Transfers arrive and leave as either `pNofM` frames (the Specter convention) or UR 2.0 (what Sparrow and the Keystone-compatible coordinators reach for), and the device replies in whichever it was asked in. UR is rateless, so a frame the camera never manages to read is recovered from a mixture of others instead of stalling the transfer — which matters on a $8 webcam. UR also carries EIP-4527, so MetaMask's and Rabby's QR-account flows work: the request arrives as `ur:eth-sign-request` and the answer goes back as `ur:eth-signature`. There the transaction arrives encoded rather than as fields, so the device rebuilds it, re-encodes it, and refuses if the two differ by a byte.
+
+One operation carries calldata, and the way it does is the point. An **ERC-20 transfer** is signed for tokens the owner registered, and the device is never handed those 68 bytes — it is handed a token, a recipient and an amount, and it writes `transfer(address,uint256)` itself. Both addresses go on the screen in full, because an ERC-20 transfer is addressed to the *contract* and carries the *recipient* in its calldata, and one address on a screen is the wrong one. `decimals` comes from the registration and never from the request: it is where the decimal point goes, and a request that could supply it could render a millionth of a token as one whole token. `approve` is not implemented, and neither is any other selector.
+
+One exception earns its place. A smart account's timelock is not in the signed message, so the same signature means "send now" or "send in two days" depending on chain state the device cannot read — the delay is registered out of band and stated on the screen, along with whether every owner signing together can skip it. And `cancelQueued` is the one self-call the device will sign, at touch tier, because a device that can start a delay but not stop one has given its owner a countdown and no button.
+
+Multisig and smart accounts must be registered before they can be signed, and this device has to be a member of what it registers — a Bitcoin quorum it holds no key in, or an EVM account it is not an owner of, is refused rather than signed for and rejected afterwards. Without the co-signers on file, "is this output mine?" collapses to "does it contain a key of mine?", and a hostile coordinator can build a script holding one key of yours and the rest theirs; it hashes correctly, the wallet calls it change, and the money moves somewhere you cannot spend alone. With the quorum registered the device rebuilds the exact script your co-signers produce and compares it byte for byte. `tools/provision.py multisig` does the registering.
 
 ## Keys and backup
 
@@ -240,8 +252,11 @@ Worth reading before you trust it with anything. `BUILD.md` §16 carries the ful
 | `firmware/se_atecc.py` | ATECC608B driver: CheckMac PIN, duress slots |
 | `firmware/wallet.py` | Provisioning, and the two signing entry points |
 | `firmware/app.py` | The loop, as a person uses it |
+| `firmware/ur.py` | UR 2.0 framing, against the published vectors |
+| `firmware/link.py` | The optional USB-C wire, and what choosing it costs |
 | `firmware/run_tests.py` | Every self-test in one run. What CI runs |
 | `tools/provision.py` | Choose a seed, wrap it, record the watch-only accounts |
+| `tools/companion.py` | The host end of the USB-C variant's wire |
 | `tools/gen_printables.py` | Generates every printable part, checks it, writes the manifest |
 | `tools/gen_enclosure.py` | The inside of the two shells, and the fit checks |
 | `tools/bench.py` | The checks only the built device can answer |
