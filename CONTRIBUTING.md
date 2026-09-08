@@ -127,5 +127,5 @@ Prose in the reference documents is linted:
 python3 tools/prose_lint.py
 ```
 
-It keeps BUILD, VALIDATION, PRINTING and SAFETY flat. The budgets are a
-ratchet. Lowering one is a contribution.
+Every document in the repo has a budget, in tics per thousand words. The
+budgets are a ratchet. Lowering one is a contribution.

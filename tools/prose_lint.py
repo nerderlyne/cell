@@ -16,12 +16,12 @@ it costs; it does not tell you how you ought to feel about the effort.
 TIC DENSITY is a budget, in hits per thousand words, per file. The tics are
 constructions that are fine once and conspicuous at scale -- antithesis
 ("X, not Y"), the em-dash used where a full stop would do, the closing clause
-that restates the paragraph as an aphorism. README and BOUNTY sell the thing
-and are allowed a looser budget. BUILD, VALIDATION and PRINTING are reference
-material read by someone holding a soldering iron, and are held tight.
+that restates the paragraph as an aphorism.
 
-The budgets are a ratchet, set just above where the documents actually sit.
-Lowering one is a contribution. Raising one needs a reason in the commit.
+Every document has a budget, and the budgets are a ratchet: set about 50%
+above where the document actually sits, so one new paragraph never trips it
+and a document rewritten in the voice of a pitch does. Lowering one is a
+contribution. Raising one needs a reason in the commit.
 
     python3 tools/prose_lint.py            # report and exit non-zero on failure
     python3 tools/prose_lint.py --verbose  # quote every hit
@@ -38,8 +38,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # Hits per thousand words. Set from the measured value, rounded up a little.
 BUDGETS = {
-    "README.md": 9.0,
-    "BOUNTY.md": 9.0,
+    "README.md": 4.0,
+    "BOUNTY.md": 4.0,
     "BUILD.md": 6.0,
     "VALIDATION.md": 6.0,
     "PRINTING.md": 6.0,
