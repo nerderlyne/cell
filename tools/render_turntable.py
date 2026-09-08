@@ -188,12 +188,29 @@ async function run() {
   // Downsample chain. Halving repeatedly beats one big drawImage: a single
   // 3:1 shrink point-samples and reintroduces the aliasing the supersample was
   // meant to remove, which shows up first on the 60 index ticks.
+  //
+  // Every canvas here is allocated ONCE and reused. Creating them inside the
+  // frame loop -- a fresh `keep` per halving and a fresh `out` per frame --
+  // asks the compositor to retire about 400 MB of backing store over a
+  // 240-frame spin, and under software rasterisation that is what ran the
+  // renderer out of memory mid-render. The two halving buffers ping-pong so
+  // that neither is ever read from and written to in the same step.
   const grab = document.createElement('canvas');
   const gctx = grab.getContext('2d');
-  const step = document.createElement('canvas');
-  const sctx = step.getContext('2d');
-  for (const c of [gctx, sctx]) { c.imageSmoothingEnabled = true;
-                                  c.imageSmoothingQuality = 'high'; }
+  const pong = [document.createElement('canvas'), document.createElement('canvas')];
+  const pctx = pong.map(c => c.getContext('2d'));
+  const out = document.createElement('canvas');
+  out.width = OUT; out.height = OUT;
+  const octx = out.getContext('2d');
+  // Resizing a canvas resets its context, so smoothing is set after any
+  // resize rather than once up front.
+  const smooth = (c) => { c.imageSmoothingEnabled = true;
+                          c.imageSmoothingQuality = 'high'; };
+  const fit = (c, x, n) => {
+    if (c.width !== n) { c.width = n; c.height = n; } else { x.clearRect(0, 0, n, n); }
+    smooth(x);
+  };
+  smooth(gctx); smooth(octx);
 
   for (let i = 0; i < FRAMES; i++) {
     const t = i / FRAMES;
@@ -205,24 +222,17 @@ async function run() {
     // Copy out synchronously, in the same task as render(), before the
     // compositor swaps the drawing buffer.
     const gl = renderer.domElement;
-    grab.width = gl.width; grab.height = gl.height;
+    fit(grab, gctx, gl.width);
     gctx.drawImage(gl, 0, 0);
 
-    let src = grab, w = gl.width;
+    let src = grab, w = gl.width, p = 0;
     while (w > OUT * 2) {
       const h = Math.max(OUT, Math.round(w / 2));
-      step.width = h; step.height = h;
-      sctx.clearRect(0, 0, h, h);
-      sctx.drawImage(src, 0, 0, h, h);
-      const keep = document.createElement('canvas');
-      keep.width = h; keep.height = h;
-      keep.getContext('2d').drawImage(step, 0, 0);
-      src = keep; w = h;
+      fit(pong[p], pctx[p], h);
+      pctx[p].drawImage(src, 0, 0, h, h);
+      src = pong[p]; w = h; p ^= 1;
     }
-    const out = document.createElement('canvas');
-    out.width = OUT; out.height = OUT;
-    const octx = out.getContext('2d');
-    octx.imageSmoothingEnabled = true; octx.imageSmoothingQuality = 'high';
+    octx.clearRect(0, 0, OUT, OUT);
     octx.drawImage(src, 0, 0, OUT, OUT);
 
     const url = out.toDataURL('image/png');
